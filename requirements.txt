@@ -1,0 +1,8 @@
+streamlit==1.55.0
+psd-tools
+Pillow
+pandas
+numpy
+openpyxl
+xlrd
+opencv-python-headless
