@@ -532,18 +532,45 @@ with upload_col1:
     )
 
 with upload_col2:
-    list_file = st.file_uploader(
-        "2. 上传名单",
-        type=LIST_EXTENSIONS,
-        help="CSV / Excel (.xlsx) / Excel (.xls)",
+    list_input_mode = st.radio(
+        "2. 名单输入方式",
+        ["上传文件", "手动输入（≤5人）"],
+        horizontal=True,
+        key="list_input_mode",
     )
-    st.markdown(
-        '<div class="apple-info-card"><strong>名单规则</strong>'
-        '<span>支持 CSV、XLSX、XLS。建议至少包含“公司名”和“人名”字段，自动识别更准确。</span>'
-        '<br><span style="font-size:0.84rem;color:rgba(128,128,132,0.75);">如需修正数据，重新上传名单文件即可生效。</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+
+    list_file = None
+    manual_rows = []
+
+    if list_input_mode == "上传文件":
+        list_file = st.file_uploader(
+            "上传名单文件",
+            type=LIST_EXTENSIONS,
+            help="CSV / Excel (.xlsx) / Excel (.xls)",
+        )
+        st.markdown(
+            '<div class="apple-info-card"><strong>名单规则</strong>'
+            '<span>支持 CSV、XLSX、XLS。建议至少包含"公司名"和"人名"字段，自动识别更准确。</span>'
+            '<br><span style="font-size:0.84rem;color:rgba(128,128,132,0.75);">如需修正数据，重新上传名单文件即可生效。</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        num_entries = st.number_input("填写人数", min_value=1, max_value=5, value=1, step=1)
+        for idx in range(int(num_entries)):
+            c1, c2 = st.columns(2)
+            with c1:
+                name_val = st.text_input(f"姓名 {idx+1}", key=f"manual_name_{idx}")
+            with c2:
+                company_val = st.text_input(f"公司 {idx+1}", key=f"manual_company_{idx}")
+            if name_val.strip() or company_val.strip():
+                manual_rows.append({"姓名": name_val.strip(), "公司名": company_val.strip()})
+        st.markdown(
+            '<div class="apple-info-card"><strong>手动输入规则</strong>'
+            '<span>适合 5 人以内的少量名单，直接填写姓名和公司即可。至少填写一行。</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
 with upload_col3:
     qr_file = st.file_uploader(
@@ -558,9 +585,10 @@ with upload_col3:
         unsafe_allow_html=True,
     )
 
-st.caption("上传方式：可拖拽文件到上传框，或点击“选择文件”按钮上传。")
+st.caption("上传方式：可拖拽文件到上传框，或点击\"选择文件\"按钮上传。手动输入模式下直接填写姓名和公司。")
 
-if template_file and list_file:
+has_list = list_file or manual_rows
+if template_file and has_list:
     suffix = file_suffix(template_file)
     is_psd = suffix in PSD_EXTENSIONS
 
@@ -591,7 +619,11 @@ if template_file and list_file:
             layer_names = []
             positions = {}
 
-    rows, fields = parse_spreadsheet(list_file)
+    if list_file:
+        rows, fields = parse_spreadsheet(list_file)
+    else:
+        rows = manual_rows
+        fields = ["姓名", "公司名"]
     if not rows:
         st.warning("名单为空或读取失败，请检查文件。")
         st.stop()
@@ -1089,7 +1121,7 @@ if template_file and list_file:
                 use_container_width=True,
             )
 else:
-    st.info("\u8bf7\u5148\u4e0a\u4f20\u6a21\u677f\u6587\u4ef6\u548c\u540d\u5355\u6587\u4ef6")
+    st.info("请先上传模板文件，并上传名单或手动输入名单信息")
 
 st.markdown("---")
 with st.expander("\u57fa\u7840\u95ee\u9898\u89e3\u8bf4", expanded=False):
