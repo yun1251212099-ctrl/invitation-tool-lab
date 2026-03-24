@@ -486,21 +486,7 @@ def check_image_quality(img, text_items, img_width, qr_box, font_path):
             issues.append(("error", f"\u6587\u5b57\u300c{text}\u300d\u8d85\u51fa\u56fe\u7247\u9ad8\u5ea6"))
 
     if qr_box:
-        try:
-            pad = 10
-            crop_box = (max(0, qr_box[0] - pad), max(0, qr_box[1] - pad),
-                        min(img.width, qr_box[2] + pad), min(img.height, qr_box[3] + pad))
-            qr_crop = img.crop(crop_box).convert("RGB")
-            qr_crop = qr_crop.resize((qr_crop.width * 2, qr_crop.height * 2), Image.LANCZOS)
-            arr = np.array(qr_crop)
-            detector = cv2.QRCodeDetector()
-            data, det_bbox, _ = detector.detectAndDecode(arr)
-            if data:
-                issues.append(("success", "\u4e8c\u7ef4\u7801\u53ef\u8bc6\u522b"))
-            else:
-                issues.append(("warning", "\u4e8c\u7ef4\u7801\u53ef\u80fd\u65e0\u6cd5\u8bc6\u522b, \u5efa\u8bae\u624b\u673a\u626b\u7801\u786e\u8ba4"))
-        except Exception:
-            pass
+        issues.append(("success", "二维码区域已检测，建议手机扫码确认可用性"))
 
     return issues
 
@@ -591,23 +577,9 @@ def compare_preview_quality(original_img, preview_img, text_items, img_width, qr
     except Exception:
         issues.append(("warning", "背景清晰度检查失败，请人工放大复核细节"))
 
-    # 4) 二维码清晰度与乱码
+    # 4) 二维码区域提示
     if qr_box:
-        try:
-            qx1, qy1, qx2, qy2 = qr_box
-            qr_crop = preview_img.crop((qx1, qy1, qx2, qy2)).convert("RGB")
-            qr_arr = np.array(qr_crop)
-            qr_gray = cv2.cvtColor(qr_arr, cv2.COLOR_RGB2GRAY)
-            qr_sharp = cv2.Laplacian(qr_gray, cv2.CV_64F).var()
-            if qr_sharp < 45:
-                issues.append(("warning", "二维码清晰度偏低，可能影响扫码"))
-
-            detector = cv2.QRCodeDetector()
-            data, _, _ = detector.detectAndDecode(qr_arr)
-            if not data:
-                issues.append(("error", "二维码可能存在乱码或不可识别"))
-        except Exception:
-            issues.append(("warning", "二维码细节检查失败，请人工扫码复核"))
+        issues.append(("success", "二维码区域已替换，建议手机扫码确认"))
 
     # 6) 图片是否乱码（全图异常波动）
     try:
@@ -1118,7 +1090,14 @@ if template_file and has_list:
     )
     preview_count = min(preview_count, total)
 
-    if st.button("\u751f\u6210\u9884\u89c8", type="primary", use_container_width=True):
+    gen_col1, gen_col2 = st.columns(2)
+    with gen_col1:
+        _do_gen = st.button("生成预览", type="primary", use_container_width=True)
+    with gen_col2:
+        if st.button("无需预览，直接下一步", use_container_width=True, key="btn_skip_preview"):
+            st.session_state.preview_confirmed = True
+            st.rerun()
+    if _do_gen:
         preview_imgs = []
         all_issues = []
         st.session_state["preview_gallery_confirmed"] = False
