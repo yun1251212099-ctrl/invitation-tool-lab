@@ -18,12 +18,12 @@ from psd_tools import PSDImage
 APP_DIR = Path(__file__).parent
 FONTS_DIR = APP_DIR / "fonts"
 
-st.set_page_config(page_title="批量邀请函生成（测试版）", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="批量邀请函生成", page_icon="📨", layout="wide")
 st.markdown(
     """
     <div class="apple-hero">
-      <h1>批量邀请函生成工具（测试版）</h1>
-      <p>测试环境：用于新功能验证，不影响正式版网址。</p>
+      <h1>批量邀请函生成工具</h1>
+      <p>上传模板与名单，预览确认后一键批量生成并下载压缩包。</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -163,32 +163,34 @@ LIST_EXTENSIONS = ["csv", "xlsx", "xls"]
 
 @st.cache_data
 def scan_fonts():
-    """Scan bundled fonts dir + common system font dirs."""
+    """Scan bundled fonts dir (recursive) + common system font dirs."""
     fonts = {}
-    search_dirs = [str(FONTS_DIR)]
+    search_roots = [str(FONTS_DIR)]
     for sys_dir in ["/System/Library/Fonts", "/System/Library/Fonts/Supplemental",
                     "/Library/Fonts", os.path.expanduser("~/Library/Fonts"),
                     "/usr/share/fonts", "/usr/local/share/fonts"]:
         if os.path.isdir(sys_dir):
-            search_dirs.append(sys_dir)
+            search_roots.append(sys_dir)
 
-    for d in search_dirs:
-        if not os.path.isdir(d):
-            continue
-        for f in os.listdir(d):
-            if not any(f.lower().endswith(ext) for ext in (".ttf", ".otf", ".ttc")):
-                continue
-            path = os.path.join(d, f)
-            try:
-                family, style = ImageFont.truetype(path, 20).getname()
-                display = f"{family} ({style})"
-                fonts[display] = path
-            except Exception:
-                pass
+    for root_dir in search_roots:
+        for dirpath, _dirnames, filenames in os.walk(root_dir):
+            for f in filenames:
+                if not any(f.lower().endswith(ext) for ext in (".ttf", ".otf", ".ttc")):
+                    continue
+                path = os.path.join(dirpath, f)
+                try:
+                    family, style = ImageFont.truetype(path, 20).getname()
+                    display = f"{family} ({style})"
+                    fonts[display] = path
+                except Exception:
+                    pass
     return dict(sorted(fonts.items()))
 
 
 def get_default_font_path():
+    medium = FONTS_DIR / "OPPOSans-Medium.ttf"
+    if medium.exists():
+        return str(medium)
     bundled = FONTS_DIR / "OPPOSans4.ttf"
     if bundled.exists():
         return str(bundled)
@@ -228,8 +230,15 @@ def get_text_layers(psd):
 
 
 def get_qr_layer(psd):
+    _QR_KEYWORDS = ["\u4e8c\u7ef4\u7801", "qr", "qrcode", "\u626b\u7801", "\u626b\u4e00\u626b"]
     for l in psd.descendants():
-        if l.kind == "smartobject" and "二维码" in l.name:
+        name_lower = l.name.lower()
+        if any(kw in name_lower for kw in _QR_KEYWORDS):
+            if l.kind in ("smartobject", "pixel", "group"):
+                return l
+    for l in psd.descendants():
+        name_lower = l.name.lower()
+        if any(kw in name_lower for kw in _QR_KEYWORDS):
             return l
     return None
 
@@ -238,6 +247,20 @@ def detect_qr_region(psd):
     qr_layer = get_qr_layer(psd)
     if qr_layer is not None:
         return (qr_layer.left, qr_layer.top, qr_layer.right, qr_layer.bottom)
+    return None
+
+
+def extract_qr_mask(psd):
+    """Extract the real alpha mask from the QR smart object layer."""
+    qr_layer = get_qr_layer(psd)
+    if qr_layer is None:
+        return None
+    try:
+        layer_img = qr_layer.composite()
+        if layer_img and layer_img.mode == "RGBA":
+            return layer_img.split()[3]
+    except Exception:
+        pass
     return None
 
 
@@ -263,11 +286,14 @@ def rounded_corner_mask(size, radius):
     return mask
 
 
-def replace_qr(background, qr_image, qr_box, corner_radius=3):
+def replace_qr(background, qr_image, qr_box, real_mask=None, corner_radius=3):
     tw = qr_box[2] - qr_box[0]
     th = qr_box[3] - qr_box[1]
     qr_resized = qr_image.convert("RGBA").resize((tw, th), Image.LANCZOS)
-    mask = rounded_corner_mask((tw, th), corner_radius)
+    if real_mask is not None:
+        mask = real_mask.resize((tw, th), Image.LANCZOS)
+    else:
+        mask = rounded_corner_mask((tw, th), corner_radius)
     bg_region = background.crop(qr_box).convert("RGBA")
     composite = Image.composite(qr_resized, bg_region, mask)
     background.paste(composite, (qr_box[0], qr_box[1]))
@@ -685,11 +711,12 @@ if template_file and list_file:
             psd = load_psd(template_file)
             text_layers = get_text_layers(psd)
             layer_names = [l.name for l in text_layers]
-            _default_font = str(FONTS_DIR / "OPPOSans4.ttf")
+            _default_font = get_default_font_path()
             positions = get_text_layer_positions(psd, _default_font)
             font_color = get_font_color(psd)
             font_size = 51
             qr_box = detect_qr_region(psd)
+            qr_real_mask = extract_qr_mask(psd)
             original_img = psd.composite()
             bg = composite_background(psd)
             img_width = psd.width
@@ -707,6 +734,7 @@ if template_file and list_file:
             font_size = 51
             font_color = (255, 255, 255, 255)
             qr_box = None
+            qr_real_mask = None
             layer_names = []
             positions = {}
 
@@ -962,7 +990,7 @@ if template_file and list_file:
     # ── QR replacement ──
     if qr_file and qr_box:
         qr_img = Image.open(qr_file).convert("RGBA")
-        bg = replace_qr(bg, qr_img, qr_box)
+        bg = replace_qr(bg, qr_img, qr_box, real_mask=qr_real_mask)
 
     def build_text_items(row):
         items = []
@@ -1126,31 +1154,28 @@ if template_file and list_file:
 
         with fix_col2:
             if report_text and _fix_id is None:
-                if st.button("生成问题日志", use_container_width=True, key="btn_gen_issue_log"):
-                    import datetime
-                    log_lines = [
-                        "--- 问题日志 ---",
-                        f"时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                        f"问题描述: {report_text}",
-                        "自动识别: 未匹配到已知修复方案",
-                        "",
-                        "当前参数:",
-                        f"  字体: {Path(font_path).name}",
-                        f"  公司名字号={company_fsize}, 粗细={company_stroke}",
-                        f"  人名字号={name_fsize}, 粗细={name_stroke}",
-                        f"  图片尺寸: {img_width}x{img_height}",
-                        "",
-                        "建议: 调整上方“字体粗细微调”滑块，或切换字体来源。",
-                    ]
-                    st.session_state["issue_log"] = "\n".join(log_lines)
-                    st.rerun()
+                st.info("未识别到自动修复方案，请尝试调整粗细滑块或切换字体。")
 
-        if st.session_state.get("issue_log"):
-            st.markdown("**问题日志（可复制）:**")
-            st.code(st.session_state["issue_log"], language="text")
-            st.caption("请复制以上日志发送给开发者协助排查。")
+        import datetime as _dt, json as _json
+        if report_text:
+            _log_path = APP_DIR / "issue_log.jsonl"
+            _entry = {
+                "time": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "issue": report_text,
+                "fix_id": _fix_id,
+                "font": Path(font_path).name if font_path else "",
+                "company_fsize": company_fsize, "company_stroke": company_stroke,
+                "name_fsize": name_fsize, "name_stroke": name_stroke,
+                "size": f"{img_width}x{img_height}",
+            }
+            try:
+                with open(_log_path, "a", encoding="utf-8") as _lf:
+                    _lf.write(_json.dumps(_entry, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
 
-        st.caption("操作提示：输入问题后系统自动识别并尝试修复；无法识别时可生成问题日志。")
+        st.caption("操作提示：输入问题后系统自动识别并尝试修复。")
+
 
         if report_text:
             st.warning(f"你反馈的问题: 「{report}」")
