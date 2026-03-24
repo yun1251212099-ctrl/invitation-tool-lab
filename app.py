@@ -109,6 +109,13 @@ st.markdown(
     }
     [data-testid="stFileUploaderDropzone"] button {
         border-radius: 10px;
+        font-size: 0;
+        position: relative;
+    }
+    [data-testid="stFileUploaderDropzone"] button::after {
+        content: "上传文件";
+        font-size: 0.95rem;
+        line-height: 1;
     }
     [data-testid="stButton"] > button {
         border-radius: 12px;
@@ -792,9 +799,9 @@ if template_file and has_list:
 
     # ── mapping preview table ──
     if mapping_ok:
-        st.markdown("**\u6620\u5c04\u9884\u89c8 (\u524d3\u884c):**")
+        st.markdown("**名单预览（前50名）:**")
         preview_data = []
-        for i in range(min(3, len(rows))):
+        for i in range(min(50, len(rows))):
             row_preview = {}
             if enable_company and company_field:
                 row_preview["\u516c\u53f8\u540d"] = rows[i][company_field]
