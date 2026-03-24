@@ -131,27 +131,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── password gate ────────────────────────────────────────
-import hashlib
-_PASS = "950621"
-_TOKEN = hashlib.sha256(_PASS.encode()).hexdigest()[:16]
-
-_authenticated = False
-if st.query_params.get("token") == _TOKEN:
-    _authenticated = True
-elif st.session_state.get("authenticated"):
-    _authenticated = True
-
-if not _authenticated:
-    pwd = st.text_input("\u8bf7\u8f93\u5165\u8bbf\u95ee\u5bc6\u7801", type="password")
-    if pwd == _PASS:
-        st.session_state.authenticated = True
-        st.query_params["token"] = _TOKEN
-        st.rerun()
-    elif pwd:
-        st.error("\u5bc6\u7801\u9519\u8bef")
-    st.stop()
-
 PSD_EXTENSIONS = (".psd", ".psb")
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp")
 VECTOR_EXTENSIONS = (".pdf", ".eps", ".ai")
@@ -1099,209 +1078,42 @@ if template_file and has_list:
 
     if "preview_confirmed" not in st.session_state:
         st.session_state.preview_confirmed = False
-    if "single_check_done" not in st.session_state:
-        st.session_state.single_check_done = False
-    if "single_check_issues" not in st.session_state:
-        st.session_state.single_check_issues = []
-    if "checked_report" not in st.session_state:
-        st.session_state.checked_report = ""
 
-    confirm_col1, confirm_col2 = st.columns(2)
+    if st.session_state.get("_do_regen"):
+        st.session_state["_do_regen"] = False
+        regen_img = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
+        st.session_state["regen_preview"] = regen_img
+
+    confirm_col1, confirm_col2, confirm_col3 = st.columns(3)
     with confirm_col1:
-        st.markdown(
-            '<div class="action-card"><strong>路径 A：确认无问题</strong><span>未填写问题时，可直接进入下一步。</span></div>',
-            unsafe_allow_html=True,
-        )
         if st.button(
-            "✅ 无问题，直接下一步",
+            "无问题，直接下一步",
             type="primary",
             use_container_width=True,
-            key="btn_preview_direct_next",
+            key="btn_preview_ok",
         ):
-            report_text = st.session_state.get("preview_report", "").strip()
-            if report_text:
-                st.warning("你已填写问题描述，请先点击“有错误点击重新生成预览”，确认无问题后再进入下一步。")
-                st.session_state.preview_confirmed = False
-            else:
-                st.session_state.preview_confirmed = True
-                st.rerun()
+            st.session_state.preview_confirmed = True
+            st.rerun()
     with confirm_col2:
-        st.markdown(
-            '<div class="action-card"><strong>路径 B：发现问题先修复</strong>'
-            '<span>输入问题后系统自动识别并尝试修复，无法自动修复时可生成问题日志。</span></div>',
-            unsafe_allow_html=True,
-        )
-        report = st.text_input(
-            "请描述发现的问题",
-            placeholder="例如: 字体偏细 / 字体偏小 / 位置偏移 / 间距不对...",
-            key="preview_report",
-        )
-        report_text = report.strip()
-
-        if report_text != st.session_state.get("checked_report", ""):
-            st.session_state.single_check_done = False
-            st.session_state.single_check_issues = []
-
-        _FIX_RULES = [
-            (["粗细", "加粗", "偏细", "太细", "变细", "细了"],
-             "stroke", "字体粗细"),
-            (["偏大", "偏小", "字号", "太大", "太小", "大小"],
-             "fontsize", "字体大小"),
-            (["偏移", "位置", "偏了", "不居中", "居中"],
-             "position", "文字位置"),
-            (["间距", "行距", "字距", "间隔"],
-             "spacing", "文字间距"),
-        ]
-
-        def _detect_fix(text):
-            for kws, fid, lab in _FIX_RULES:
-                for kw in kws:
-                    if kw in text:
-                        return fid, lab
-            return None, None
-
-        _fix_id, _fix_label = _detect_fix(report_text) if report_text else (None, None)
-
-        if report_text and _fix_id:
-            st.info(f"已识别问题类型：**{_fix_label}**")
-
-        fix_col1, fix_col2 = st.columns(2)
-        with fix_col1:
-            if report_text and _fix_id in ("stroke", "fontsize"):
-                if st.button(f"一键修复：调整{_fix_label}", use_container_width=True, key="btn_auto_fix"):
-                    _cs = company_stroke
-                    _ns = name_stroke
-                    _cf = company_fsize
-                    _nf = name_fsize
-                    if _fix_id == "stroke":
-                        _cs = min(4, _cs + 1)
-                        _ns = min(4, _ns + 1)
-                    elif _fix_id == "fontsize":
-                        if any(k in report_text for k in ["小", "偏小", "太小"]):
-                            _cf += 2
-                            _nf += 2
-                        else:
-                            _cf = max(10, _cf - 2)
-                            _nf = max(10, _nf - 2)
-                    regen_items = []
-                    if enable_company and company_field:
-                        regen_items.append((first[company_field], company_y, _cf, _cs))
-                    if enable_name and name_field:
-                        regen_items.append((first[name_field], name_y, _nf, _ns))
-                    regen_img = generate_one(bg, regen_items, img_width, font_color, font_path)
-                    st.session_state["regen_preview"] = regen_img
-                    basic_issues = check_image_quality(regen_img, regen_items, img_width, qr_box, font_path)
-                    diff_issues = compare_preview_quality(
-                        original_img, regen_img, regen_items,
-                        img_width, qr_box, font_path,
-                        use_custom_font=bool(custom_font_file),
-                    )
-                    st.session_state.single_check_issues = basic_issues + diff_issues
-                    st.session_state.single_check_done = True
-                    st.session_state.checked_report = report_text
-                    st.session_state.preview_confirmed = False
-                    st.rerun()
-            else:
-                if st.button(
-                    "有错误点击重新生成预览",
-                    use_container_width=True,
-                    key="btn_preview_regen_check",
-                ):
-                    if report_text:
-                        regen_img = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
-                        st.session_state["regen_preview"] = regen_img
-                        text_items_now = build_text_items(first)
-                        basic_issues = check_image_quality(regen_img, text_items_now, img_width, qr_box, font_path)
-                        diff_issues = compare_preview_quality(
-                            original_img, regen_img, text_items_now,
-                            img_width, qr_box, font_path,
-                            use_custom_font=bool(custom_font_file),
-                        )
-                        st.session_state.single_check_issues = basic_issues + diff_issues
-                        st.session_state.single_check_done = True
-                        st.session_state.checked_report = report_text
-                        st.session_state.preview_confirmed = False
-                        st.rerun()
-                    else:
-                        st.warning("请先输入问题描述再点击。")
-
-        with fix_col2:
-            if report_text and _fix_id is None:
-                st.info("未识别到自动修复方案，请尝试调整粗细滑块或切换字体。")
-
-        import datetime as _dt, json as _json
-        if report_text:
-            _log_path = APP_DIR / "issue_log.jsonl"
-            _entry = {
-                "time": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "issue": report_text,
-                "fix_id": _fix_id,
-                "font": Path(font_path).name if font_path else "",
-                "company_fsize": company_fsize, "company_stroke": company_stroke,
-                "name_fsize": name_fsize, "name_stroke": name_stroke,
-                "size": f"{img_width}x{img_height}",
-            }
-            try:
-                with open(_log_path, "a", encoding="utf-8") as _lf:
-                    _lf.write(_json.dumps(_entry, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-
-        st.caption("操作提示：输入问题后系统自动识别并尝试修复。")
-
-
-        if report_text:
-            st.warning(f"你反馈的问题: 「{report}」")
-            if st.session_state.single_check_done and st.session_state.get("checked_report", "") == report_text:
-                has_errors = False
-                has_warnings = False
-                if not st.session_state.single_check_issues:
-                    st.success("本次检查未发现问题。")
-                for level, msg in st.session_state.single_check_issues:
-                    if level == "error":
-                        has_errors = True
-                        st.error(msg)
-                    elif level == "warning":
-                        has_warnings = True
-                        st.warning(msg)
-                    elif level == "success":
-                        st.success(msg)
-
-                action_col1, action_col2 = st.columns(2)
-                with action_col1:
-                    if st.button(
-                        "有问题继续生成修复预览",
-                        use_container_width=True,
-                        key="btn_preview_continue_fix",
-                    ):
-                        st.session_state.single_check_done = False
-                        st.session_state.preview_confirmed = False
-                        st.rerun()
-                with action_col2:
-                    if st.button(
-                        "无问题，进行下一步",
-                        type="primary",
-                        use_container_width=True,
-                        key="btn_preview_no_issue_next",
-                    ):
-                        if has_errors:
-                            st.error("仍存在错误项，请继续修复。")
-                            st.session_state.preview_confirmed = False
-                        else:
-                            st.session_state.preview_confirmed = True
-                            st.rerun()
-            else:
-                if _fix_id:
-                    st.info(f"请点击上方“一键修复”按钮尝试自动修复。")
-                else:
-                    st.info("请点击“有错误点击重新生成预览”或“生成问题日志”。")
+        if st.button(
+            "发现问题，点击修改",
+            use_container_width=True,
+            key="btn_preview_issue",
+        ):
+            preview_issue_dialog()
+    with confirm_col3:
+        if st.button(
+            "无需预览，直接下一步",
+            use_container_width=True,
+            key="btn_skip_preview",
+        ):
+            st.session_state.preview_confirmed = True
+            st.rerun()
 
     if not st.session_state.preview_confirmed:
-        if st.session_state.get("preview_report", "").strip():
-            st.info("已记录问题，请先点击“有错误点击重新生成预览”；确认无问题后点击“无问题，进行下一步”。")
-        else:
-            st.info("\u8bf7\u5148\u786e\u8ba4\u4e0a\u65b9\u9884\u89c8\u6548\u679c\u65e0\u8bef\uff0c\u624d\u80fd\u7ee7\u7eed\u4e0b\u4e00\u6b65")
+        st.info("请先确认上方预览效果无误，才能继续下一步")
         st.stop()
+
 
     # ── step 1: preview samples ──
     st.markdown("### \u751f\u6210\u9884\u89c8")
@@ -1314,7 +1126,7 @@ if template_file and has_list:
     )
     preview_count = min(preview_count, total)
 
-    if st.button("\u751f\u6210\u9884\u89c8", type="secondary", use_container_width=True):
+    if st.button("\u751f\u6210\u9884\u89c8", type="primary", use_container_width=True):
         preview_imgs = []
         all_issues = []
         st.session_state["preview_gallery_confirmed"] = False
