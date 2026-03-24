@@ -18,12 +18,12 @@ from psd_tools import PSDImage
 APP_DIR = Path(__file__).parent
 FONTS_DIR = APP_DIR / "fonts"
 
-st.set_page_config(page_title="批量邀请函生成", page_icon="📨", layout="wide")
+st.set_page_config(page_title="批量邀请函生成（测试版）", page_icon="🧪", layout="wide")
 st.markdown(
     """
     <div class="apple-hero">
-      <h1>批量邀请函生成工具</h1>
-      <p>上传模板与名单，预览确认后一键批量生成并下载压缩包。</p>
+      <h1>批量邀请函生成工具（测试版）</h1>
+      <p>测试环境：用于新功能验证，不影响正式版网址。</p>
     </div>
     """,
     unsafe_allow_html=True,
