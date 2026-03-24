@@ -540,7 +540,7 @@ def manual_input_dialog():
     placeholder = "张三\n李四\n王五"
     if mode == "姓名和公司":
         placeholder = "张三, ABC公司\n李四, XYZ集团\n王五, 某某科技"
-    st.caption("每行一条名单；姓名和公司模式请用逗号分隔。")
+    st.caption("每行一条名单；姓名和公司模式请用逗号分隔。建议单次不超过约 1000 行，更多建议用上传名单文件。")
     raw_text = st.text_area(
         "名单内容",
         key="manual_list_raw_text",
@@ -556,6 +556,8 @@ def manual_input_dialog():
             elif not rows:
                 st.warning("请至少输入一条名单。")
             else:
+                if len(rows) > 1000:
+                    st.warning(f"当前共 {len(rows)} 条，建议大批量使用上传名单文件。")
                 st.session_state["manual_list_rows"] = rows
                 st.rerun()
     with c2:
@@ -583,6 +585,7 @@ with upload_col1:
     )
 
 with upload_col2:
+    st.caption("方式一：上传名单文件")
     list_file = st.file_uploader(
         "2. 上传名单",
         type=LIST_EXTENSIONS,
@@ -591,23 +594,33 @@ with upload_col2:
     st.markdown(
         '<div class="apple-info-card"><strong>名单规则</strong>'
         '<span>支持 CSV、XLSX、XLS。建议至少包含“公司名”和“人名”字段，自动识别更准确。</span>'
-        '<br><span style="font-size:0.84rem;color:rgba(128,128,132,0.75);">如需修正数据，重新上传名单文件即可生效。</span>'
+        '<br><span>若单个数量或需要手动逐条录入，可点击下方“手动输入名单”。手动输入建议单次约 1000 条以内。</span>'
+        '<br><span style="font-size:0.84rem;color:rgba(128,128,132,0.75);">如需修正数据，重新上传名单文件即可生效；若同时保留上传文件和手动名单，优先使用上传文件。</span>'
         '</div>',
         unsafe_allow_html=True,
     )
+    manual_rows = st.session_state.get("manual_list_rows", [])
+    st.caption("方式二 / 方式三：手动输入名单 / 清除名单")
     mbtn_col1, mbtn_col2 = st.columns([2, 1])
     with mbtn_col1:
         if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
             manual_input_dialog()
-    manual_rows = st.session_state.get("manual_list_rows", [])
     with mbtn_col2:
-        if manual_rows and st.button("清除名单", use_container_width=True, key="clear_manual_list_btn"):
+        if st.button(
+            "清除名单",
+            use_container_width=True,
+            key="clear_manual_list_btn",
+            disabled=not bool(manual_rows),
+            help="清除当前手动输入的名单，不影响已上传的名单文件。",
+        ):
             st.session_state.pop("manual_list_rows", None)
             st.session_state.pop("manual_list_raw_text", None)
             st.session_state.pop("manual_list_mode", None)
             st.rerun()
     if manual_rows:
         st.caption(f"已手动输入 {len(manual_rows)} 条名单，可继续编辑或直接下一步。")
+    else:
+        st.caption("当前无手动名单，可点击“手动输入名单”新增。")
 
 with upload_col3:
     qr_file = st.file_uploader(
@@ -622,7 +635,7 @@ with upload_col3:
         unsafe_allow_html=True,
     )
 
-st.caption("上传方式：可拖拽文件到上传框，或点击“选择文件”按钮上传。也可点击“手动输入名单”弹窗填写。")
+st.caption("上传方式：支持上传名单文件、手动输入名单（建议约 1000 条以内）和清除手动名单。")
 
 has_list = list_file or manual_rows
 if template_file and has_list:
@@ -796,6 +809,7 @@ if template_file and has_list:
 
     # ── font selection ──
     st.markdown("### 字体选择")
+    st.caption("备注规则：若当前没有所需字体文件，请联系设计师提供 .ttf / .otf 后再在此上传；不上传则使用下方已有字体。")
 
     custom_font_file = st.file_uploader(
         "上传自定义字体 (可选, 支持 .ttf / .otf)",
