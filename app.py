@@ -322,13 +322,91 @@ def get_text_layer_positions(psd, font_path=None):
                     if font_idx < len(fs):
                         ps_name = fs[font_idx].get("Name", "").lower()
                         if any(w in ps_name for w in
-                               ["bold", "heavy", "black", "semibold", "demibold"]):
+                               ["bold", "heavy", "black", "semibold", "demibold", "medium"]):
                             stroke_w = max(1, round(cal_size / 36))
+                except Exception:
+                    pass
+
+            if stroke_w == 0:
+                try:
+                    layer_img = l.composite()
+                    if layer_img is not None:
+                        arr = np.array(layer_img.convert("L"), dtype=np.float64)
+                        bright = arr > 80
+                        if bright.any():
+                            cov = float(bright.sum()) / float(arr.size)
+                            if cov > 0.35:
+                                stroke_w = max(1, round(cal_size / 40))
                 except Exception:
                     pass
 
             positions[l.name] = (cy, cal_size, l.width, stroke_w)
     return positions
+
+
+def _calibrate_single_stroke(layer, original_img, bg, font_path, font_size, color, img_width, center_y):
+    """Find stroke_width whose ink volume best matches the PSD render."""
+    text = layer.text.strip()
+    if not text or layer.height < 5:
+        return 0
+
+    pad = 20
+    box = (max(0, layer.left - pad), max(0, layer.top - pad),
+           min(original_img.width, layer.right + pad),
+           min(original_img.height, layer.bottom + pad))
+
+    ori_crop = np.array(original_img.crop(box).convert("L"), dtype=np.float64)
+    bg_crop_np = np.array(bg.crop(box).convert("L"), dtype=np.float64)
+    bg_crop_img = bg.crop(box).convert("RGBA")
+
+    psd_ink = np.sum(np.abs(ori_crop - bg_crop_np))
+    if psd_ink < 100:
+        return 0
+
+    f = ImageFont.truetype(font_path, font_size)
+    bbox = f.getbbox(text)
+    text_w = bbox[2] - bbox[0]
+    x = (img_width - text_w) // 2 - box[0]
+    y = center_y - (bbox[1] + bbox[3]) // 2 - box[1]
+
+    best_sw = 0
+    best_diff = float("inf")
+    for sw in range(0, 5):
+        test = bg_crop_img.copy()
+        draw = ImageDraw.Draw(test)
+        if sw > 0:
+            draw.text((x, y), text, font=f, fill=color,
+                      stroke_width=sw, stroke_fill=color)
+        else:
+            draw.text((x, y), text, font=f, fill=color)
+
+        test_np = np.array(test.convert("L"), dtype=np.float64)
+        pil_ink = np.sum(np.abs(test_np - bg_crop_np))
+
+        diff = abs(psd_ink - pil_ink)
+        if diff < best_diff:
+            best_diff = diff
+            best_sw = sw
+    return best_sw
+
+
+def calibrate_stroke_weights(psd, positions, original_img, bg, font_path, color, img_width):
+    """Override stroke_width in positions using pixel-level ink comparison."""
+    updated = {}
+    for l in psd.descendants():
+        if l.kind == "type" and l.name in positions:
+            cy, cal_size, lw, old_sw = positions[l.name]
+            try:
+                sw = _calibrate_single_stroke(
+                    l, original_img, bg, font_path, cal_size, color, img_width, cy)
+            except Exception:
+                sw = old_sw
+            updated[l.name] = (cy, cal_size, lw, sw)
+
+    for k in positions:
+        if k not in updated:
+            updated[k] = positions[k]
+    return updated
 
 
 def draw_centered_text(draw, font, text, center_y, img_width, color, stroke_width=0):
@@ -609,6 +687,9 @@ if template_file and list_file:
             bg = composite_background(psd)
             img_width = psd.width
             img_height = psd.height
+            positions = calibrate_stroke_weights(
+                psd, positions, original_img, bg,
+                _default_font, font_color, img_width)
         else:
             loaded = load_image(template_file)
             if loaded is None:
