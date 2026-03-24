@@ -94,57 +94,29 @@ st.markdown(
         font-size: 0.86rem;
         color: rgba(128, 128, 132, 0.95);
     }
-    /* file_uploader in list col: minimal — only show button */
     [data-testid="stFileUploaderDropzone"] {
-        border: none;
-        background: transparent;
-        padding: 0;
+        border-radius: 14px;
+        border: 1px solid rgba(120, 120, 128, 0.35);
+        padding-top: 0.45rem;
+        padding-bottom: 0.45rem;
     }
     [data-testid="stFileUploaderDropzoneInstructions"] {
         display: none;
     }
-    [data-testid="stFileUploader"] label {
-        display: none;
-    }
     [data-testid="stFileUploader"] small {
-        display: none;
+        font-size: 0.9rem;
+        color: rgba(128, 128, 132, 0.92);
     }
     [data-testid="stFileUploaderDropzone"] button {
-        border-radius: 980px;
-        min-height: 2.75rem;
-        font-size: 0;
-        position: relative;
-        width: 100%;
-        padding: 0 1.5rem;
+        border-radius: 10px;
     }
-    [data-testid="stFileUploaderDropzone"] button::after {
-        content: "上传名单文件";
-        font-size: 0.94rem;
-        font-weight: 400;
-        line-height: 1;
+    [data-testid="stButton"] > button {
+        border-radius: 12px;
+        min-height: 2.7rem;
     }
-    /* Unified Apple-style buttons */
-    [data-testid="stButton"] > button,
     [data-testid="stDownloadButton"] > button {
-        border-radius: 980px;
-        min-height: 2.75rem;
-        padding: 0 1.5rem;
-        font-size: 0.94rem;
-        font-weight: 400;
-        letter-spacing: 0.01em;
-        transition: background 0.2s ease, opacity 0.2s ease, transform 0.1s ease;
-    }
-    [data-testid="stButton"] > button:hover,
-    [data-testid="stDownloadButton"] > button:hover {
-        opacity: 0.88;
-    }
-    [data-testid="stButton"] > button:active,
-    [data-testid="stDownloadButton"] > button:active {
-        transform: scale(0.97);
-    }
-    [data-testid="stButton"] > button:disabled {
-        opacity: 0.42;
-        cursor: not-allowed;
+        border-radius: 12px;
+        min-height: 2.8rem;
     }
     </style>
     """,
@@ -323,7 +295,11 @@ def get_font_color(psd):
 
 
 def get_text_layer_positions(psd, font_path=None):
-    """Return {layer_name: (center_y, calibrated_font_size, psd_width)}."""
+    """Return {layer_name: (center_y, calibrated_font_size, psd_width, stroke_width)}.
+
+    stroke_width is derived from PSD FauxBold flag or bold font variant name,
+    simulating Photoshop's bold rendering in Pillow via stroke.
+    """
     positions = {}
     for l in psd.descendants():
         if l.kind == "type":
@@ -333,27 +309,51 @@ def get_text_layer_positions(psd, font_path=None):
             cal_size = int(raw_size)
             if font_path and l.height > 0 and len(l.text) >= 1:
                 cal_size = calibrate_font_size(font_path, l.text, l.height, raw_size)
-            positions[l.name] = (cy, cal_size, l.width)
+
+            stroke_w = 0
+            faux_bold = ss.get("FauxBold", False)
+            if faux_bold:
+                stroke_w = max(1, round(cal_size / 36))
+
+            if stroke_w == 0:
+                try:
+                    fs = l.engine_dict.get("ResourceDict", {}).get("FontSet", [])
+                    font_idx = int(ss.get("Font", 0))
+                    if font_idx < len(fs):
+                        ps_name = fs[font_idx].get("Name", "").lower()
+                        if any(w in ps_name for w in
+                               ["bold", "heavy", "black", "semibold", "demibold"]):
+                            stroke_w = max(1, round(cal_size / 36))
+                except Exception:
+                    pass
+
+            positions[l.name] = (cy, cal_size, l.width, stroke_w)
     return positions
 
 
-def draw_centered_text(draw, font, text, center_y, img_width, color):
+def draw_centered_text(draw, font, text, center_y, img_width, color, stroke_width=0):
     """Draw text horizontally and vertically centered using standard draw.text."""
     bbox = font.getbbox(text)
     text_w = bbox[2] - bbox[0]
     x = (img_width - text_w) // 2
     y = center_y - (bbox[1] + bbox[3]) // 2
-    draw.text((x, y), text, font=font, fill=color)
+    if stroke_width > 0:
+        draw.text((x, y), text, font=font, fill=color,
+                  stroke_width=stroke_width, stroke_fill=color)
+    else:
+        draw.text((x, y), text, font=font, fill=color)
 
 
 def generate_one(background, text_items, img_width, color, font_path):
-    """text_items: list of (text_str, center_y, font_size)."""
+    """text_items: list of (text_str, center_y, font_size[, stroke_width])."""
     img = background.copy()
     draw = ImageDraw.Draw(img)
-    for text, cy, fsize in text_items:
+    for item in text_items:
+        text, cy, fsize = item[0], item[1], item[2]
+        sw = item[3] if len(item) > 3 else 0
         if text:
             f = ImageFont.truetype(font_path, fsize)
-            draw_centered_text(draw, f, text, cy, img_width, color)
+            draw_centered_text(draw, f, text, cy, img_width, color, stroke_width=sw)
     return img
 
 
@@ -361,7 +361,8 @@ def check_image_quality(img, text_items, img_width, qr_box, font_path):
     """Quality checks: text bounds, spacing vs PSD width, QR readability."""
     issues = []
 
-    for text, center_y, fsize in text_items:
+    for item in text_items:
+        text, center_y, fsize = item[0], item[1], item[2]
         if not text:
             continue
         f = ImageFont.truetype(font_path, fsize)
@@ -412,7 +413,8 @@ def compare_preview_quality(original_img, preview_img, text_items, img_width, qr
             issues.append(("warning", f"字体可能不是指定 OPPO 字体（当前: {Path(font_path).name}）"))
 
     # 1) 字体大小、字距、边距、居中、对齐 + 5) 空格
-    for text, center_y, fsize in text_items:
+    for item in text_items:
+        text, center_y, fsize = item[0], item[1], item[2]
         if not text:
             issues.append(("warning", "检测到空文本，可能导致内容缺失"))
             continue
@@ -444,7 +446,8 @@ def compare_preview_quality(original_img, preview_img, text_items, img_width, qr
             h, w, _ = ori_rgb.shape
             mask = np.ones((h, w), dtype=np.uint8)
 
-            for text, center_y, fsize in text_items:
+            for item in text_items:
+                text, center_y, fsize = item[0], item[1], item[2]
                 if not text:
                     continue
                 f = ImageFont.truetype(font_path, fsize)
@@ -540,59 +543,6 @@ def parse_spreadsheet(uploaded):
     return rows, fields
 
 
-def parse_manual_lines(raw_text, mode):
-    rows = []
-    for line in raw_text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if mode == "只有姓名":
-            rows.append({"姓名": line})
-            continue
-
-        parts = [p.strip() for p in line.replace("，", ",").split(",", 1)]
-        if len(parts) < 2 or not parts[0] or not parts[1]:
-            return None, f"格式错误：{line}。请使用“姓名, 公司”格式。"
-        rows.append({"姓名": parts[0], "公司名": parts[1]})
-    return rows, None
-
-
-@st.dialog("手动输入名单", width="large")
-def manual_input_dialog():
-    mode = st.radio(
-        "名单类型",
-        ["只有姓名", "姓名和公司"],
-        horizontal=True,
-        key="manual_list_mode",
-    )
-    placeholder = "张三\n李四\n王五"
-    if mode == "姓名和公司":
-        placeholder = "张三, ABC公司\n李四, XYZ集团\n王五, 某某科技"
-    st.caption("每行一条名单；姓名和公司模式请用逗号分隔。建议单次不超过约 1000 行，更多建议用上传名单文件。")
-    raw_text = st.text_area(
-        "名单内容",
-        key="manual_list_raw_text",
-        height=260,
-        placeholder=placeholder,
-    )
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("确认", type="primary", use_container_width=True, key="manual_list_confirm_btn"):
-            rows, err = parse_manual_lines(raw_text, mode)
-            if err:
-                st.error(err)
-            elif not rows:
-                st.warning("请至少输入一条名单。")
-            else:
-                if len(rows) > 1000:
-                    st.warning(f"当前共 {len(rows)} 条，建议大批量使用上传名单文件。")
-                st.session_state["manual_list_rows"] = rows
-                st.rerun()
-    with c2:
-        if st.button("取消", use_container_width=True, key="manual_list_cancel_btn"):
-            st.rerun()
-
-
 # ── UI ───────────────────────────────────────────────────
 
 st.markdown('<div class="apple-section-title">第一步：上传文件</div>', unsafe_allow_html=True)
@@ -613,46 +563,18 @@ with upload_col1:
     )
 
 with upload_col2:
-    st.caption("2. 名单（二选一）")
-    list_btn_col1, list_btn_col2 = st.columns([1, 1])
-    with list_btn_col1:
-        list_file = st.file_uploader(
-            "上传名单文件",
-            type=LIST_EXTENSIONS,
-            help="CSV / Excel (.xlsx) / Excel (.xls)",
-            label_visibility="collapsed",
-        )
-    with list_btn_col2:
-        if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
-            manual_input_dialog()
+    list_file = st.file_uploader(
+        "2. 上传名单",
+        type=LIST_EXTENSIONS,
+        help="CSV / Excel (.xlsx) / Excel (.xls)",
+    )
     st.markdown(
         '<div class="apple-info-card"><strong>名单规则</strong>'
         '<span>支持 CSV、XLSX、XLS。建议至少包含“公司名”和“人名”字段，自动识别更准确。</span>'
-        '<br><span>若单个数量或需要手动逐条录入，可点击右侧“手动输入名单”。手动输入建议单次约 1000 条以内。</span>'
-        '<br><span style="font-size:0.84rem;color:rgba(128,128,132,0.75);">如需修正数据，重新上传名单文件即可生效；若同时保留上传文件和手动名单，优先使用上传文件。</span>'
+        '<br><span style="font-size:0.84rem;color:rgba(128,128,132,0.75);">如需修正数据，重新上传名单文件即可生效。</span>'
         '</div>',
         unsafe_allow_html=True,
     )
-    manual_rows = st.session_state.get("manual_list_rows", [])
-    mbtn_col1, mbtn_col2 = st.columns([1, 1])
-    with mbtn_col1:
-        if st.button(
-            "清除名单",
-            use_container_width=True,
-            key="clear_manual_list_btn",
-            disabled=not bool(manual_rows),
-            help="清除当前手动输入的名单，不影响已上传的名单文件。",
-        ):
-            st.session_state.pop("manual_list_rows", None)
-            st.session_state.pop("manual_list_raw_text", None)
-            st.session_state.pop("manual_list_mode", None)
-            st.rerun()
-    with mbtn_col2:
-        st.empty()
-    if manual_rows:
-        st.caption(f"已手动输入 {len(manual_rows)} 条名单，可继续编辑或直接下一步。")
-    else:
-        st.caption("当前无手动名单，可点击“手动输入名单”新增。")
 
 with upload_col3:
     qr_file = st.file_uploader(
@@ -667,8 +589,9 @@ with upload_col3:
         unsafe_allow_html=True,
     )
 
-has_list = list_file or manual_rows
-if template_file and has_list:
+st.caption("上传方式：可拖拽文件到上传框，或点击“选择文件”按钮上传。")
+
+if template_file and list_file:
     suffix = file_suffix(template_file)
     is_psd = suffix in PSD_EXTENSIONS
 
@@ -699,11 +622,7 @@ if template_file and has_list:
             layer_names = []
             positions = {}
 
-    if list_file:
-        rows, fields = parse_spreadsheet(list_file)
-    else:
-        rows = manual_rows
-        fields = list(rows[0].keys()) if rows else []
+    rows, fields = parse_spreadsheet(list_file)
     if not rows:
         st.warning("名单为空或读取失败，请检查文件。")
         st.stop()
@@ -770,9 +689,11 @@ if template_file and has_list:
     company_field = None
     company_y = 0
     company_fsize = font_size
+    company_stroke = 0
     name_field = None
     name_y = 0
     name_fsize = font_size
+    name_stroke = 0
     company_layer = None
     name_layer = None
 
@@ -787,6 +708,7 @@ if template_file and has_list:
                 company_layer = st.selectbox("\u516c\u53f8\u540d\u5bf9\u5e94 PSD \u56fe\u5c42", layer_names, index=cl_idx)
                 company_y = positions[company_layer][0]
                 company_fsize = positions[company_layer][1]
+                company_stroke = positions[company_layer][3]
             else:
                 company_y = st.number_input("\u516c\u53f8\u540d Y \u5750\u6807", 0, img_height, int(img_height * 0.45))
 
@@ -801,6 +723,7 @@ if template_file and has_list:
                 name_layer = st.selectbox("\u4eba\u540d\u5bf9\u5e94 PSD \u56fe\u5c42", layer_names, index=nl_idx)
                 name_y = positions[name_layer][0]
                 name_fsize = positions[name_layer][1]
+                name_stroke = positions[name_layer][3]
             else:
                 name_y = st.number_input("\u4eba\u540d Y \u5750\u6807", 0, img_height, int(img_height * 0.48))
 
@@ -822,9 +745,9 @@ if template_file and has_list:
 
     # ── mapping preview table ──
     if mapping_ok:
-        st.markdown("**名单预览（前50名）:**")
+        st.markdown("**\u6620\u5c04\u9884\u89c8 (\u524d3\u884c):**")
         preview_data = []
-        for i in range(min(50, len(rows))):
+        for i in range(min(3, len(rows))):
             row_preview = {}
             if enable_company and company_field:
                 row_preview["\u516c\u53f8\u540d"] = rows[i][company_field]
@@ -839,7 +762,6 @@ if template_file and has_list:
 
     # ── font selection ──
     st.markdown("### 字体选择")
-    st.caption("备注规则：若当前没有所需字体文件，请联系设计师提供 .ttf / .otf 后再在此上传；不上传则使用下方已有字体。")
 
     custom_font_file = st.file_uploader(
         "上传自定义字体 (可选, 支持 .ttf / .otf)",
@@ -899,9 +821,9 @@ if template_file and has_list:
     def build_text_items(row):
         items = []
         if enable_company and company_field:
-            items.append((row[company_field], company_y, company_fsize))
+            items.append((row[company_field], company_y, company_fsize, company_stroke))
         if enable_name and name_field:
-            items.append((row[name_field], name_y, name_fsize))
+            items.append((row[name_field], name_y, name_fsize, name_stroke))
         return items
 
     def build_filename(row):
@@ -1202,7 +1124,7 @@ if template_file and has_list:
                 use_container_width=True,
             )
 else:
-    st.info("请先上传模板文件，并上传名单或手动输入名单信息")
+    st.info("\u8bf7\u5148\u4e0a\u4f20\u6a21\u677f\u6587\u4ef6\u548c\u540d\u5355\u6587\u4ef6")
 
 st.markdown("---")
 with st.expander("\u57fa\u7840\u95ee\u9898\u89e3\u8bf4", expanded=False):
