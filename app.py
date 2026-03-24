@@ -490,7 +490,24 @@ def check_image_quality(img, text_items, img_width, qr_box, font_path):
             issues.append(("error", f"\u6587\u5b57\u300c{text}\u300d\u8d85\u51fa\u56fe\u7247\u9ad8\u5ea6"))
 
     if qr_box:
-        issues.append(("success", "二维码区域已检测，建议手机扫码确认可用性"))
+        try:
+            pad = 10
+            crop_box = (max(0, qr_box[0] - pad), max(0, qr_box[1] - pad),
+                        min(img.width, qr_box[2] + pad), min(img.height, qr_box[3] + pad))
+            qr_crop = img.crop(crop_box).convert("RGB")
+            qr_crop = qr_crop.resize((qr_crop.width * 2, qr_crop.height * 2), Image.LANCZOS)
+            arr = np.array(qr_crop)
+            if _HAS_CV2:
+                detector = cv2.QRCodeDetector()
+                data, det_bbox, _ = detector.detectAndDecode(arr)
+                if data:
+                    issues.append(("success", "\u4e8c\u7ef4\u7801\u53ef\u8bc6\u522b"))
+                else:
+                    issues.append(("success", "\u4e8c\u7ef4\u7801\u5df2\u66ff\u6362\uff0c\u5efa\u8bae\u624b\u673a\u626b\u7801\u786e\u8ba4"))
+            else:
+                issues.append(("success", "\u4e8c\u7ef4\u7801\u5df2\u66ff\u6362\uff0c\u5efa\u8bae\u624b\u673a\u626b\u7801\u786e\u8ba4"))
+        except Exception:
+            pass
 
     return issues
 
@@ -582,9 +599,21 @@ def compare_preview_quality(original_img, preview_img, text_items, img_width, qr
     except Exception:
         issues.append(("warning", "背景清晰度检查失败，请人工放大复核细节"))
 
-    # 4) 二维码区域提示
+    # 4) 二维码清晰度与乱码
     if qr_box:
-        issues.append(("success", "二维码区域已替换，建议手机扫码确认"))
+        try:
+            qx1, qy1, qx2, qy2 = qr_box
+            qr_crop = preview_img.crop((qx1, qy1, qx2, qy2)).convert("RGB")
+            qr_arr = np.array(qr_crop)
+            if _HAS_CV2:
+                qr_gray = cv2.cvtColor(qr_arr, cv2.COLOR_RGB2GRAY)
+                qr_sharp = cv2.Laplacian(qr_gray, cv2.CV_64F).var()
+                if qr_sharp < 45:
+                    issues.append(("warning", "二维码清晰度偏低，可能影响扫码"))
+            else:
+                issues.append(("success", "已跳过二维码清晰度检测，建议人工扫码确认"))
+        except Exception:
+            issues.append(("warning", "二维码细节检查失败，请人工扫码复核"))
 
     # 6) 图片是否乱码（全图异常波动）
     try:
@@ -598,6 +627,56 @@ def compare_preview_quality(original_img, preview_img, text_items, img_width, qr
         pass
 
     return issues
+
+
+def check_list_generation_quality(rows, enable_company, company_field, enable_name, name_field, filename_builder):
+    """检查名单信息是否会导致生成错误（空值、异常字符、重名文件）。"""
+    issues = []
+    seen_names = {}
+    for idx, row in enumerate(rows):
+        row_no = idx + 1
+        if enable_company and company_field:
+            cv = str(row.get(company_field, "")).strip()
+            if (not cv) or cv.lower() == "nan":
+                issues.append(("error", f"第 {row_no} 条公司名为空"))
+            if "\ufffd" in cv:
+                issues.append(("error", f"第 {row_no} 条公司名包含异常字符"))
+        if enable_name and name_field:
+            nv = str(row.get(name_field, "")).strip()
+            if (not nv) or nv.lower() == "nan":
+                issues.append(("error", f"第 {row_no} 条人名为空"))
+            if "\ufffd" in nv:
+                issues.append(("error", f"第 {row_no} 条人名包含异常字符"))
+
+        fname = filename_builder(row).strip()
+        if not fname:
+            issues.append(("error", f"第 {row_no} 条生成文件名为空"))
+        elif fname in seen_names:
+            issues.append(("error", f"文件名重复：第 {seen_names[fname]} 条 和 第 {row_no} 条 -> {fname}"))
+        else:
+            seen_names[fname] = row_no
+    return issues
+
+
+def build_fix_log(all_check_issues, list_issues):
+    lines = [f"纠错日志时间: {_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]
+    lines.append("=== 名单信息检查 ===")
+    if list_issues:
+        for lvl, msg in list_issues:
+            lines.append(f"[{lvl.upper()}] {msg}")
+    else:
+        lines.append("[SUCCESS] 名单信息检查通过")
+    lines.append("=== 图片质量检查 ===")
+    if all_check_issues:
+        for fname, issues in all_check_issues:
+            if not issues:
+                lines.append(f"[SUCCESS] {fname}: 未发现问题")
+            else:
+                for lvl, msg in issues:
+                    lines.append(f"[{lvl.upper()}] {fname}: {msg}")
+    else:
+        lines.append("[INFO] 未执行图片质量检查")
+    return "\n".join(lines) + "\n"
 
 
 def parse_spreadsheet(uploaded):
@@ -621,20 +700,9 @@ def parse_spreadsheet(uploaded):
         return [], []
 
     df = df.dropna(how="all")
-    df = df.loc[:, ~df.columns.astype(str).str.match(r"^Unnamed")]
-    df = df.dropna(axis=1, how="all")
-    if df.empty:
-        return [], []
-    first_col = df.iloc[:, 0]
-    df = df[first_col.notna() & (first_col.astype(str).str.strip() != "") & (first_col.astype(str) != "nan")]
     df.columns = [str(c).strip() for c in df.columns]
     fields = list(df.columns)
-    df = df.fillna("")
     rows = df.astype(str).to_dict("records")
-    for row in rows:
-        for k, v in row.items():
-            if v == "nan":
-                row[k] = ""
     return rows, fields
 
 
@@ -721,18 +789,14 @@ with upload_col2:
         st.caption(f"已手动输入 {len(manual_rows)} 条名单")
 
 with upload_col3:
-    skip_qr = st.checkbox("无需替换二维码", value=True, key="skip_qr")
-    if skip_qr:
-        qr_file = None
-        st.caption("保留模板原始二维码，无需上传。")
-    else:
-        qr_file = st.file_uploader(
-            "3. 上传替换二维码",
-            type=["png", "jpg", "jpeg", "webp"],
-        )
+    qr_file = st.file_uploader(
+        "3. 上传替换二维码（可选）",
+        type=["png", "jpg", "jpeg", "webp"],
+    )
     st.markdown(
         '<div class="apple-info-card"><strong>二维码规则</strong>'
-        '<span>勾选"无需替换"则保留原图二维码；取消勾选后上传新图片即可自动替换。</span>'
+        '<span>可选项。不上传则保留模板原二维码；上传后按模板位置自动替换并保留圆角效果。</span>'
+        '<br><span style="font-size:0.84rem;color:rgba(128,128,132,0.75);">如需更换二维码，重新上传图片即可覆盖。</span>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -903,34 +967,19 @@ if template_file and has_list:
         if long_names:
             st.warning(f"\u4eba\u540d\u5b57\u6bb5\u4e2d\u53d1\u73b0\u8f83\u957f\u7684\u503c: \u300c{'、'.join(long_names)}\u300d\uff0c\u8bf7\u786e\u8ba4\u662f\u5426\u9009\u5bf9\u4e86\u5b57\u6bb5")
 
-    # ── editable name preview ──
+    # ── mapping preview table ──
     if mapping_ok:
-        preview_n = min(200, len(rows))
-        st.markdown(f"**名单预览（前 {preview_n} 名）：**")
+        st.markdown("**\u6620\u5c04\u9884\u89c8 (\u524d3\u884c):**")
         preview_data = []
-        col_map = {}
-        for i in range(preview_n):
+        for i in range(min(3, len(rows))):
             row_preview = {}
             if enable_company and company_field:
-                row_preview["公司名"] = rows[i].get(company_field, "")
-                col_map["公司名"] = company_field
+                row_preview["\u516c\u53f8\u540d"] = rows[i][company_field]
             if enable_name and name_field:
-                row_preview["人名"] = rows[i].get(name_field, "")
-                col_map["人名"] = name_field
+                row_preview["\u4eba\u540d"] = rows[i][name_field]
             preview_data.append(row_preview)
         if preview_data:
-            preview_df = pd.DataFrame(preview_data)
-            edited_df = st.data_editor(
-                preview_df, num_rows="fixed",
-                use_container_width=True, key="name_editor",
-            )
-            for idx, row_edit in edited_df.iterrows():
-                if idx < len(rows):
-                    for col_label, field_key in col_map.items():
-                        new_val = str(row_edit.get(col_label, ""))
-                        if new_val != "nan":
-                            rows[idx][field_key] = new_val
-
+            st.table(preview_data)
 
     if not mapping_ok:
         st.stop()
@@ -1085,32 +1134,209 @@ if template_file and has_list:
 
     if "preview_confirmed" not in st.session_state:
         st.session_state.preview_confirmed = False
-
-    if st.session_state.get("_do_regen"):
-        st.session_state["_do_regen"] = False
-        regen_img = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
-        st.session_state["regen_preview"] = regen_img
+    if "single_check_done" not in st.session_state:
+        st.session_state.single_check_done = False
+    if "single_check_issues" not in st.session_state:
+        st.session_state.single_check_issues = []
+    if "checked_report" not in st.session_state:
+        st.session_state.checked_report = ""
 
     confirm_col1, confirm_col2 = st.columns(2)
     with confirm_col1:
+        st.markdown(
+            '<div class="action-card"><strong>路径 A：确认无问题</strong><span>未填写问题时，可直接进入下一步。</span></div>',
+            unsafe_allow_html=True,
+        )
         if st.button(
-            "无问题，直接下一步",
+            "✅ 无问题，直接下一步",
             type="primary",
             use_container_width=True,
-            key="btn_preview_ok",
+            key="btn_preview_direct_next",
         ):
-            st.session_state.preview_confirmed = True
-            st.rerun()
+            report_text = st.session_state.get("preview_report", "").strip()
+            if report_text:
+                st.warning("你已填写问题描述，请先点击“有错误点击重新生成预览”，确认无问题后再进入下一步。")
+                st.session_state.preview_confirmed = False
+            else:
+                st.session_state.preview_confirmed = True
+                st.rerun()
     with confirm_col2:
-        if st.button(
-            "发现问题，点击修改",
-            use_container_width=True,
-            key="btn_preview_issue",
-        ):
-            preview_issue_dialog()
+        st.markdown(
+            '<div class="action-card"><strong>路径 B：发现问题先修复</strong>'
+            '<span>输入问题后系统自动识别并尝试修复，无法自动修复时可生成问题日志。</span></div>',
+            unsafe_allow_html=True,
+        )
+        report = st.text_input(
+            "请描述发现的问题",
+            placeholder="例如: 字体偏细 / 字体偏小 / 位置偏移 / 间距不对...",
+            key="preview_report",
+        )
+        report_text = report.strip()
 
-    st.caption("可选：可先生成预览确认，也可直接进入下一步批量生成。")
+        if report_text != st.session_state.get("checked_report", ""):
+            st.session_state.single_check_done = False
+            st.session_state.single_check_issues = []
 
+        _FIX_RULES = [
+            (["粗细", "加粗", "偏细", "太细", "变细", "细了"],
+             "stroke", "字体粗细"),
+            (["偏大", "偏小", "字号", "太大", "太小", "大小"],
+             "fontsize", "字体大小"),
+            (["偏移", "位置", "偏了", "不居中", "居中"],
+             "position", "文字位置"),
+            (["间距", "行距", "字距", "间隔"],
+             "spacing", "文字间距"),
+        ]
+
+        def _detect_fix(text):
+            for kws, fid, lab in _FIX_RULES:
+                for kw in kws:
+                    if kw in text:
+                        return fid, lab
+            return None, None
+
+        _fix_id, _fix_label = _detect_fix(report_text) if report_text else (None, None)
+
+        if report_text and _fix_id:
+            st.info(f"已识别问题类型：**{_fix_label}**")
+
+        fix_col1, fix_col2 = st.columns(2)
+        with fix_col1:
+            if report_text and _fix_id in ("stroke", "fontsize"):
+                if st.button(f"一键修复：调整{_fix_label}", use_container_width=True, key="btn_auto_fix"):
+                    _cs = company_stroke
+                    _ns = name_stroke
+                    _cf = company_fsize
+                    _nf = name_fsize
+                    if _fix_id == "stroke":
+                        _cs = min(4, _cs + 1)
+                        _ns = min(4, _ns + 1)
+                    elif _fix_id == "fontsize":
+                        if any(k in report_text for k in ["小", "偏小", "太小"]):
+                            _cf += 2
+                            _nf += 2
+                        else:
+                            _cf = max(10, _cf - 2)
+                            _nf = max(10, _nf - 2)
+                    regen_items = []
+                    if enable_company and company_field:
+                        regen_items.append((first[company_field], company_y, _cf, _cs))
+                    if enable_name and name_field:
+                        regen_items.append((first[name_field], name_y, _nf, _ns))
+                    regen_img = generate_one(bg, regen_items, img_width, font_color, font_path)
+                    st.session_state["regen_preview"] = regen_img
+                    basic_issues = check_image_quality(regen_img, regen_items, img_width, qr_box, font_path)
+                    diff_issues = compare_preview_quality(
+                        original_img, regen_img, regen_items,
+                        img_width, qr_box, font_path,
+                        use_custom_font=bool(custom_font_file),
+                    )
+                    st.session_state.single_check_issues = basic_issues + diff_issues
+                    st.session_state.single_check_done = True
+                    st.session_state.checked_report = report_text
+                    st.session_state.preview_confirmed = False
+                    st.rerun()
+            else:
+                if st.button(
+                    "有错误点击重新生成预览",
+                    use_container_width=True,
+                    key="btn_preview_regen_check",
+                ):
+                    if report_text:
+                        regen_img = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
+                        st.session_state["regen_preview"] = regen_img
+                        text_items_now = build_text_items(first)
+                        basic_issues = check_image_quality(regen_img, text_items_now, img_width, qr_box, font_path)
+                        diff_issues = compare_preview_quality(
+                            original_img, regen_img, text_items_now,
+                            img_width, qr_box, font_path,
+                            use_custom_font=bool(custom_font_file),
+                        )
+                        st.session_state.single_check_issues = basic_issues + diff_issues
+                        st.session_state.single_check_done = True
+                        st.session_state.checked_report = report_text
+                        st.session_state.preview_confirmed = False
+                        st.rerun()
+                    else:
+                        st.warning("请先输入问题描述再点击。")
+
+        with fix_col2:
+            if report_text and _fix_id is None:
+                st.info("未识别到自动修复方案，请尝试调整粗细滑块或切换字体。")
+
+        import datetime as _dt, json as _json
+        if report_text:
+            _log_path = APP_DIR / "issue_log.jsonl"
+            _entry = {
+                "time": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "issue": report_text,
+                "fix_id": _fix_id,
+                "font": Path(font_path).name if font_path else "",
+                "company_fsize": company_fsize, "company_stroke": company_stroke,
+                "name_fsize": name_fsize, "name_stroke": name_stroke,
+                "size": f"{img_width}x{img_height}",
+            }
+            try:
+                with open(_log_path, "a", encoding="utf-8") as _lf:
+                    _lf.write(_json.dumps(_entry, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+
+        st.caption("操作提示：输入问题后系统自动识别并尝试修复。")
+
+
+        if report_text:
+            st.warning(f"你反馈的问题: 「{report}」")
+            if st.session_state.single_check_done and st.session_state.get("checked_report", "") == report_text:
+                has_errors = False
+                has_warnings = False
+                if not st.session_state.single_check_issues:
+                    st.success("本次检查未发现问题。")
+                for level, msg in st.session_state.single_check_issues:
+                    if level == "error":
+                        has_errors = True
+                        st.error(msg)
+                    elif level == "warning":
+                        has_warnings = True
+                        st.warning(msg)
+                    elif level == "success":
+                        st.success(msg)
+
+                action_col1, action_col2 = st.columns(2)
+                with action_col1:
+                    if st.button(
+                        "有问题继续生成修复预览",
+                        use_container_width=True,
+                        key="btn_preview_continue_fix",
+                    ):
+                        st.session_state.single_check_done = False
+                        st.session_state.preview_confirmed = False
+                        st.rerun()
+                with action_col2:
+                    if st.button(
+                        "无问题，进行下一步",
+                        type="primary",
+                        use_container_width=True,
+                        key="btn_preview_no_issue_next",
+                    ):
+                        if has_errors:
+                            st.error("仍存在错误项，请继续修复。")
+                            st.session_state.preview_confirmed = False
+                        else:
+                            st.session_state.preview_confirmed = True
+                            st.rerun()
+            else:
+                if _fix_id:
+                    st.info(f"请点击上方“一键修复”按钮尝试自动修复。")
+                else:
+                    st.info("请点击“有错误点击重新生成预览”或“生成问题日志”。")
+
+    if not st.session_state.preview_confirmed:
+        if st.session_state.get("preview_report", "").strip():
+            st.info("已记录问题，请先点击“有错误点击重新生成预览”；确认无问题后点击“无问题，进行下一步”。")
+        else:
+            st.info("\u8bf7\u5148\u786e\u8ba4\u4e0a\u65b9\u9884\u89c8\u6548\u679c\u65e0\u8bef\uff0c\u624d\u80fd\u7ee7\u7eed\u4e0b\u4e00\u6b65")
+        st.stop()
 
     # ── step 1: preview samples ──
     st.markdown("### \u751f\u6210\u9884\u89c8")
@@ -1123,14 +1349,7 @@ if template_file and has_list:
     )
     preview_count = min(preview_count, total)
 
-    gen_col1, gen_col2 = st.columns(2)
-    with gen_col1:
-        _do_gen = st.button("生成预览", type="primary", use_container_width=True)
-    with gen_col2:
-        if st.button("无需预览，直接下一步", use_container_width=True, key="btn_skip_preview"):
-            st.session_state.preview_confirmed = True
-            st.rerun()
-    if _do_gen:
+    if st.button("\u751f\u6210\u9884\u89c8", type="secondary", use_container_width=True):
         preview_imgs = []
         all_issues = []
         st.session_state["preview_gallery_confirmed"] = False
@@ -1148,23 +1367,6 @@ if template_file and has_list:
         progress.progress(1.0, text=f"\u9884\u89c8\u5b8c\u6210! \u5171 {preview_count} \u5f20")
         st.session_state["preview_imgs"] = preview_imgs
         st.session_state["preview_issues"] = all_issues
-
-    # ── direct generate-all (optional, no preview required) ──
-    st.markdown("---")
-    st.markdown("### 直接生成全部（可跳过预览）")
-    if st.button(f"直接生成全部 {total} 张", type="primary", use_container_width=True, key="btn_generate_all_direct"):
-        progress2 = st.progress(0, text="正在生成...")
-        all_img_data = []
-        for i, row in enumerate(rows):
-            fname = build_filename(row)
-            img = generate_one(bg, build_text_items(row), img_width, font_color, font_path)
-            img_buf = io.BytesIO()
-            img.save(img_buf, format="PNG")
-            all_img_data.append((f"{fname}.png", img_buf.getvalue()))
-            progress2.progress((i + 1) / total, text=f"正在生成 [{i+1}/{total}] {fname}")
-        progress2.progress(1.0, text=f"全部生成完成! 共 {total} 张")
-        st.session_state["all_img_data"] = all_img_data
-        st.session_state["check_done"] = False
 
     if "preview_imgs" in st.session_state and st.session_state["preview_imgs"]:
         preview_imgs = st.session_state["preview_imgs"]
@@ -1231,11 +1433,14 @@ if template_file and has_list:
 
         if not st.session_state.get("check_done", False):
             st.markdown("---")
-            st.markdown("### \u8d28\u91cf\u68c0\u67e5")
-            if st.button("\U0001f50d \u4e00\u952e\u68c0\u67e5\u6240\u6709\u56fe\u7247", use_container_width=True):
+            st.markdown("### 质量检查")
+            if st.button("🔍 一键检查所有图片", use_container_width=True):
                 check_count = min(10, len(all_img_data))
                 all_check_issues = []
-                check_progress = st.progress(0, text="\u6b63\u5728\u68c0\u67e5...")
+                list_issues = check_list_generation_quality(
+                    rows, enable_company, company_field, enable_name, name_field, build_filename
+                )
+                check_progress = st.progress(0, text="正在检查...")
                 for i in range(check_count):
                     fname = all_img_data[i][0]
                     img = Image.open(io.BytesIO(all_img_data[i][1])).convert("RGBA")
@@ -1243,12 +1448,24 @@ if template_file and has_list:
                     text_items = build_text_items(row)
                     issues = check_image_quality(img, text_items, img_width, qr_box, font_path)
                     all_check_issues.append((fname, issues))
-                    check_progress.progress((i + 1) / check_count,
-                                            text=f"\u68c0\u67e5 [{i+1}/{check_count}]")
-                check_progress.progress(1.0, text="\u68c0\u67e5\u5b8c\u6210!")
+                    check_progress.progress((i + 1) / check_count, text=f"检查 [{i+1}/{check_count}]")
+                check_progress.progress(1.0, text="检查完成!")
 
                 has_errors = False
                 has_warnings = False
+
+                if list_issues:
+                    st.markdown("#### 名单信息检查")
+                    for level, msg in list_issues:
+                        if level == "error":
+                            st.error(msg)
+                            has_errors = True
+                        elif level == "warning":
+                            st.warning(msg)
+                            has_warnings = True
+                        else:
+                            st.success(msg)
+
                 for fname, issues in all_check_issues:
                     for level, msg in issues:
                         if level == "error":
@@ -1258,16 +1475,39 @@ if template_file and has_list:
                             st.warning(f"**{fname}**: {msg}")
                             has_warnings = True
 
+                fix_log = build_fix_log(all_check_issues, list_issues)
+                st.session_state["fix_log_text"] = fix_log
+                st.download_button(
+                    "下载纠错日志",
+                    data=fix_log,
+                    file_name=f"纠错日志_{_dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+
                 if not has_errors and not has_warnings:
-                    st.success("\u2705 \u5168\u90e8\u68c0\u67e5\u901a\u8fc7! \u5b57\u4f53\u5c45\u4e2d / \u95f4\u8ddd\u6b63\u5e38 / \u4e8c\u7ef4\u7801\u53ef\u8bc6\u522b")
+                    st.success("✅ 全部检查通过! 字体居中 / 间距正常 / 二维码可识别")
                     st.session_state["check_done"] = True
                 elif not has_errors:
-                    st.info("\u68c0\u67e5\u5b8c\u6210, \u6709\u8f7b\u5fae\u8b66\u544a\u4f46\u4e0d\u5f71\u54cd\u4f7f\u7528")
+                    st.info("检查完成, 有轻微警告但不影响使用")
                     st.session_state["check_done"] = True
                 else:
-                    if st.button("\u267b\ufe0f \u68c0\u6d4b\u5230\u9519\u8bef, \u70b9\u51fb\u91cd\u65b0\u751f\u6210", type="primary", use_container_width=True):
-                        for k in ["preview_imgs", "preview_issues", "all_img_data", "check_done"]:
-                            st.session_state.pop(k, None)
+                    if st.button("♻️ 自动纠错后重新生成（尝试）", type="primary", use_container_width=True):
+                        if enable_company:
+                            company_fsize = max(10, int(company_fsize) - 2)
+                        if enable_name:
+                            name_fsize = max(10, int(name_fsize) - 2)
+                        regen_data = []
+                        regen_progress = st.progress(0, text="正在自动纠错并重新生成...")
+                        for i, row in enumerate(rows):
+                            fname = build_filename(row)
+                            img = generate_one(bg, build_text_items(row), img_width, font_color, font_path)
+                            img_buf = io.BytesIO()
+                            img.save(img_buf, format="PNG")
+                            regen_data.append((f"{fname}.png", img_buf.getvalue()))
+                            regen_progress.progress((i + 1) / len(rows), text=f"重生成 [{i+1}/{len(rows)}] {fname}")
+                        st.session_state["all_img_data"] = regen_data
+                        st.session_state["check_done"] = False
                         st.rerun()
 
         if st.session_state.get("check_done", False):
