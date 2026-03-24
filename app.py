@@ -1084,7 +1084,7 @@ if template_file and has_list:
         regen_img = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
         st.session_state["regen_preview"] = regen_img
 
-    confirm_col1, confirm_col2, confirm_col3 = st.columns(3)
+    confirm_col1, confirm_col2 = st.columns(2)
     with confirm_col1:
         if st.button(
             "无问题，直接下一步",
@@ -1101,14 +1101,6 @@ if template_file and has_list:
             key="btn_preview_issue",
         ):
             preview_issue_dialog()
-    with confirm_col3:
-        if st.button(
-            "无需预览，直接下一步",
-            use_container_width=True,
-            key="btn_skip_preview",
-        ):
-            st.session_state.preview_confirmed = True
-            st.rerun()
 
     if not st.session_state.preview_confirmed:
         st.info("请先确认上方预览效果无误，才能继续下一步")
