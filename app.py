@@ -94,36 +94,57 @@ st.markdown(
         font-size: 0.86rem;
         color: rgba(128, 128, 132, 0.95);
     }
+    /* file_uploader in list col: minimal — only show button */
     [data-testid="stFileUploaderDropzone"] {
-        border-radius: 14px;
-        border: 1px solid rgba(120, 120, 128, 0.35);
-        padding-top: 0.45rem;
-        padding-bottom: 0.45rem;
+        border: none;
+        background: transparent;
+        padding: 0;
     }
     [data-testid="stFileUploaderDropzoneInstructions"] {
         display: none;
     }
+    [data-testid="stFileUploader"] label {
+        display: none;
+    }
     [data-testid="stFileUploader"] small {
-        font-size: 0.9rem;
-        color: rgba(128, 128, 132, 0.92);
+        display: none;
     }
     [data-testid="stFileUploaderDropzone"] button {
-        border-radius: 10px;
+        border-radius: 980px;
+        min-height: 2.75rem;
         font-size: 0;
         position: relative;
+        width: 100%;
+        padding: 0 1.5rem;
     }
     [data-testid="stFileUploaderDropzone"] button::after {
-        content: "上传文件";
-        font-size: 0.95rem;
+        content: "上传名单文件";
+        font-size: 0.94rem;
+        font-weight: 400;
         line-height: 1;
     }
-    [data-testid="stButton"] > button {
-        border-radius: 12px;
-        min-height: 2.7rem;
-    }
+    /* Unified Apple-style buttons */
+    [data-testid="stButton"] > button,
     [data-testid="stDownloadButton"] > button {
-        border-radius: 12px;
-        min-height: 2.8rem;
+        border-radius: 980px;
+        min-height: 2.75rem;
+        padding: 0 1.5rem;
+        font-size: 0.94rem;
+        font-weight: 400;
+        letter-spacing: 0.01em;
+        transition: background 0.2s ease, opacity 0.2s ease, transform 0.1s ease;
+    }
+    [data-testid="stButton"] > button:hover,
+    [data-testid="stDownloadButton"] > button:hover {
+        opacity: 0.88;
+    }
+    [data-testid="stButton"] > button:active,
+    [data-testid="stDownloadButton"] > button:active {
+        transform: scale(0.97);
+    }
+    [data-testid="stButton"] > button:disabled {
+        opacity: 0.42;
+        cursor: not-allowed;
     }
     </style>
     """,
@@ -599,6 +620,7 @@ with upload_col2:
             "上传名单文件",
             type=LIST_EXTENSIONS,
             help="CSV / Excel (.xlsx) / Excel (.xls)",
+            label_visibility="collapsed",
         )
     with list_btn_col2:
         if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
@@ -644,8 +666,6 @@ with upload_col3:
         '</div>',
         unsafe_allow_html=True,
     )
-
-st.caption("上传方式：支持上传名单文件、手动输入名单（建议约 1000 条以内）和清除手动名单。")
 
 has_list = list_file or manual_rows
 if template_file and has_list:
