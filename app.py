@@ -17,7 +17,11 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
-from psd_tools import PSDImage
+try:
+    from psd_tools import PSDImage
+    _HAS_PSD = True
+except ImportError:
+    _HAS_PSD = False
 
 import subprocess as _sp
 import datetime as _dt
