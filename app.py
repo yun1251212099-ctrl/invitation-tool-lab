@@ -8,7 +8,11 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-import cv2
+try:
+    import cv2
+    _HAS_CV2 = True
+except ImportError:
+    _HAS_CV2 = False
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -568,12 +572,13 @@ def compare_preview_quality(original_img, preview_img, text_items, img_width, qr
             else:
                 issues.append(("success", "背景差异检查通过"))
 
-            ori_gray = cv2.cvtColor(ori_rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-            pre_gray = cv2.cvtColor(pre_rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-            ori_sharp = cv2.Laplacian(ori_gray, cv2.CV_64F).var()
-            pre_sharp = cv2.Laplacian(pre_gray, cv2.CV_64F).var()
-            if ori_sharp > 0 and pre_sharp / ori_sharp < 0.82:
-                issues.append(("warning", f"替换图清晰度下降（{pre_sharp/ori_sharp:.2f}x）"))
+            if _HAS_CV2:
+                ori_gray = cv2.cvtColor(ori_rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                pre_gray = cv2.cvtColor(pre_rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+                ori_sharp = cv2.Laplacian(ori_gray, cv2.CV_64F).var()
+                pre_sharp = cv2.Laplacian(pre_gray, cv2.CV_64F).var()
+                if ori_sharp > 0 and pre_sharp / ori_sharp < 0.82:
+                    issues.append(("warning", f"替换图清晰度下降（{pre_sharp/ori_sharp:.2f}x）"))
     except Exception:
         issues.append(("warning", "背景清晰度检查失败，请人工放大复核细节"))
 
