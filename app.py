@@ -108,38 +108,22 @@ st.markdown(
         color: rgba(128, 128, 132, 0.92);
     }
     [data-testid="stFileUploaderDropzone"] button {
-        border-radius: 980px;
+        border-radius: 10px;
         font-size: 0;
         position: relative;
     }
     [data-testid="stFileUploaderDropzone"] button::after {
         content: "上传文件";
-        font-size: 0.94rem;
-        font-weight: 400;
+        font-size: 0.95rem;
         line-height: 1;
     }
-    /* Apple-style buttons */
-    [data-testid="stButton"] > button,
+    [data-testid="stButton"] > button {
+        border-radius: 12px;
+        min-height: 2.7rem;
+    }
     [data-testid="stDownloadButton"] > button {
-        border-radius: 980px;
-        min-height: 2.75rem;
-        padding: 0 1.5rem;
-        font-size: 0.94rem;
-        font-weight: 400;
-        letter-spacing: 0.01em;
-        transition: background 0.2s ease, opacity 0.2s ease, transform 0.1s ease;
-    }
-    [data-testid="stButton"] > button:hover,
-    [data-testid="stDownloadButton"] > button:hover {
-        opacity: 0.88;
-    }
-    [data-testid="stButton"] > button:active,
-    [data-testid="stDownloadButton"] > button:active {
-        transform: scale(0.97);
-    }
-    [data-testid="stButton"] > button:disabled {
-        opacity: 0.42;
-        cursor: not-allowed;
+        border-radius: 12px;
+        min-height: 2.8rem;
     }
     </style>
     """,
@@ -588,55 +572,6 @@ def manual_input_dialog():
             st.rerun()
 
 
-
-@st.dialog("发现问题", width="large")
-def preview_issue_dialog():
-    """弹窗：输入问题 → 确认重新生成 → 显示分析结果。"""
-    report = st.text_input(
-        "输入问题",
-        placeholder="例如: 字体偏小 / 位置偏移 / 间距不对...",
-        key="dlg_issue_report",
-    )
-    report_text = report.strip()
-
-    if st.button("确认重新生成", type="primary", use_container_width=True, key="dlg_issue_regen"):
-        if not report_text:
-            st.warning("请先输入问题描述。")
-        else:
-            st.session_state["preview_report"] = report_text
-            st.session_state["issue_dialog_pending_regen"] = True
-            st.rerun()
-
-    if st.session_state.get("issue_dialog_pending_regen"):
-        st.session_state["issue_dialog_pending_regen"] = False
-        st.caption("分析结果：")
-        issues = st.session_state.get("single_check_issues", [])
-        if not issues:
-            st.success("未检测到明显问题。")
-        for level, msg in issues:
-            if level == "error":
-                st.error(msg)
-            elif level == "warning":
-                st.warning(msg)
-            elif level == "success":
-                st.success(msg)
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("继续修改", use_container_width=True, key="dlg_issue_continue"):
-                st.session_state.single_check_done = False
-                st.rerun()
-        with c2:
-            if st.button("无问题，进行下一步", type="primary", use_container_width=True, key="dlg_issue_next"):
-                has_errors = any(lv == "error" for lv, _ in issues)
-                if has_errors:
-                    st.error("仍存在错误项，请继续修改。")
-                else:
-                    st.session_state.preview_confirmed = True
-                    st.rerun()
-
-
-
 # ── UI ───────────────────────────────────────────────────
 
 st.markdown('<div class="apple-section-title">第一步：上传文件</div>', unsafe_allow_html=True)
@@ -657,27 +592,28 @@ with upload_col1:
     )
 
 with upload_col2:
-    st.caption("方式一：上传名单文件")
-    list_file = st.file_uploader(
-        "2. 上传名单",
-        type=LIST_EXTENSIONS,
-        help="CSV / Excel (.xlsx) / Excel (.xls)",
-    )
+    st.caption("2. 名单（二选一）")
+    list_btn_col1, list_btn_col2 = st.columns([1, 1])
+    with list_btn_col1:
+        list_file = st.file_uploader(
+            "上传名单文件",
+            type=LIST_EXTENSIONS,
+            help="CSV / Excel (.xlsx) / Excel (.xls)",
+        )
+    with list_btn_col2:
+        if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
+            manual_input_dialog()
     st.markdown(
         '<div class="apple-info-card"><strong>名单规则</strong>'
         '<span>支持 CSV、XLSX、XLS。建议至少包含“公司名”和“人名”字段，自动识别更准确。</span>'
-        '<br><span>若单个数量或需要手动逐条录入，可点击下方“手动输入名单”。手动输入建议单次约 1000 条以内。</span>'
+        '<br><span>若单个数量或需要手动逐条录入，可点击右侧“手动输入名单”。手动输入建议单次约 1000 条以内。</span>'
         '<br><span style="font-size:0.84rem;color:rgba(128,128,132,0.75);">如需修正数据，重新上传名单文件即可生效；若同时保留上传文件和手动名单，优先使用上传文件。</span>'
         '</div>',
         unsafe_allow_html=True,
     )
     manual_rows = st.session_state.get("manual_list_rows", [])
-    st.caption("方式二 / 方式三：手动输入名单 / 清除名单")
-    mbtn_col1, mbtn_col2 = st.columns([2, 1])
+    mbtn_col1, mbtn_col2 = st.columns([1, 1])
     with mbtn_col1:
-        if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
-            manual_input_dialog()
-    with mbtn_col2:
         if st.button(
             "清除名单",
             use_container_width=True,
@@ -689,6 +625,8 @@ with upload_col2:
             st.session_state.pop("manual_list_raw_text", None)
             st.session_state.pop("manual_list_mode", None)
             st.rerun()
+    with mbtn_col2:
+        st.empty()
     if manual_rows:
         st.caption(f"已手动输入 {len(manual_rows)} 条名单，可继续编辑或直接下一步。")
     else:
@@ -893,26 +831,204 @@ if template_file and has_list:
         font_tmp = tempfile.NamedTemporaryFile(suffix=file_suffix(custom_font_file), delete=False)
         font_tmp.write(custom_font_file.getvalue())
         font_tmp.flush()
+        font_path = font_tmp.name
+        try:
+            family, style = ImageFont.truetype(font_path, 20).getname()
+            st.success(f"已加载自定义字体：{family} ({style})")
+        except Exception as e:
+            st.error(f"字体文件无法加载: {e}")
+            font_path = get_default_font_path()
+    else:
+        all_fonts = scan_fonts()
+        font_names = list(all_fonts.keys())
+        if font_names:
+            default_idx = 0
+            for i, name in enumerate(font_names):
+                if "OPPO Sans 4.0" in name:
+                    default_idx = i
+                    break
+            selected_font = st.selectbox(
+                "或从已有字体中选择",
+                font_names,
+                index=default_idx,
+                help=f"已扫描到 {len(font_names)} 个可用字体",
+            )
+            font_path = all_fonts[selected_font]
+        else:
+            font_path = get_default_font_path()
+            if font_path:
+                st.info("使用默认字体 OPPO Sans 4.0")
+            else:
+                st.error("未找到任何可用字体，请上传 .ttf 字体文件")
+                st.stop()
+
+    if not is_psd:
+        fcol1, fcol2 = st.columns(2)
+        with fcol1:
+            font_size = st.number_input("字号", 10, 200, int(font_size))
+        with fcol2:
+            color_hex = st.color_picker("文字颜色", "#FFFFFF")
+            r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
+            font_color = (r, g, b, 255)
+
+    # ── QR replacement ──
+    if qr_file and qr_box:
+        qr_img = Image.open(qr_file).convert("RGBA")
+        bg = replace_qr(bg, qr_img, qr_box)
+
+    def build_text_items(row):
+        items = []
+        if enable_company and company_field:
+            items.append((row[company_field], company_y, company_fsize))
+        if enable_name and name_field:
+            items.append((row[name_field], name_y, name_fsize))
+        return items
+
+    def build_filename(row):
+        parts = []
+        if enable_company and company_field:
+            parts.append(row[company_field])
+        if enable_name and name_field:
+            parts.append(row[name_field])
+        return "_".join(parts) if parts else f"row"
+
+    # ── preview: original vs first ──
+    st.markdown('<div class="apple-section-title">第三步：预览与生成</div>', unsafe_allow_html=True)
+    first = rows[0]
+    preview = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
+    preview_show = st.session_state.get("regen_preview", preview)
+
+    pcol1, pcol2 = st.columns(2)
+    with pcol1:
+        st.image(original_img, caption="\u539f\u59cb\u6a21\u677f", use_container_width=True)
+    with pcol2:
+        st.image(preview_show, caption=f"\u66ff\u6362\u6548\u679c: {build_filename(first)}",
+                 use_container_width=True)
+
+    st.markdown("---")
+    st.caption("\u8bf7\u4ed4\u7ec6\u5bf9\u6bd4\u4e0a\u65b9\u4e24\u5f20\u56fe\uff0c\u786e\u8ba4\u5b57\u4f53\u5927\u5c0f\u3001\u4f4d\u7f6e\u3001\u95f4\u8ddd\u3001\u4e8c\u7ef4\u7801\u662f\u5426\u4e0e\u539f\u56fe\u4e00\u81f4\u3002")
+
+    if "preview_confirmed" not in st.session_state:
+        st.session_state.preview_confirmed = False
+    if "single_check_done" not in st.session_state:
+        st.session_state.single_check_done = False
+    if "single_check_issues" not in st.session_state:
+        st.session_state.single_check_issues = []
+    if "checked_report" not in st.session_state:
+        st.session_state.checked_report = ""
+
     confirm_col1, confirm_col2 = st.columns(2)
     with confirm_col1:
+        st.markdown(
+            '<div class="action-card"><strong>路径 A：确认无问题</strong><span>未填写问题时，可直接进入下一步。</span></div>',
+            unsafe_allow_html=True,
+        )
         if st.button(
-            "无问题，直接下一步",
+            "✅ 无问题，直接下一步",
             type="primary",
             use_container_width=True,
             key="btn_preview_direct_next",
         ):
-            st.session_state.preview_confirmed = True
-            st.rerun()
+            report_text = st.session_state.get("preview_report", "").strip()
+            if report_text:
+                st.warning("你已填写问题描述，请先点击“有错误点击重新生成预览”，确认无问题后再进入下一步。")
+                st.session_state.preview_confirmed = False
+            else:
+                st.session_state.preview_confirmed = True
+                st.rerun()
     with confirm_col2:
+        st.markdown(
+            '<div class="action-card"><strong>路径 B：发现问题先修复</strong><span>输入问题后，先重新生成预览并检查，再决定是否进入下一步。</span></div>',
+            unsafe_allow_html=True,
+        )
+        report = st.text_input(
+            "请描述发现的问题",
+            placeholder="\u4f8b\u5982: \u5b57\u4f53\u504f\u5c0f / \u4f4d\u7f6e\u504f\u79fb / \u95f4\u8ddd\u4e0d\u5bf9...",
+            key="preview_report",
+        )
+        report_text = report.strip()
+
+        if report_text != st.session_state.get("checked_report", ""):
+            st.session_state.single_check_done = False
+            st.session_state.single_check_issues = []
+
         if st.button(
-            "发现问题，点击修改",
+            "有错误点击重新生成预览",
             use_container_width=True,
-            key="btn_open_issue_dialog",
+            key="btn_preview_regen_check",
         ):
-            preview_issue_dialog()
+            if report_text:
+                regen_img = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
+                st.session_state["regen_preview"] = regen_img
+                text_items_now = build_text_items(first)
+                basic_issues = check_image_quality(regen_img, text_items_now, img_width, qr_box, font_path)
+                diff_issues = compare_preview_quality(
+                    original_img,
+                    regen_img,
+                    text_items_now,
+                    img_width,
+                    qr_box,
+                    font_path,
+                    use_custom_font=bool(custom_font_file),
+                )
+                st.session_state.single_check_issues = basic_issues + diff_issues
+                st.session_state.single_check_done = True
+                st.session_state.checked_report = report_text
+                st.session_state.preview_confirmed = False
+                st.rerun()
+            else:
+                st.warning("\u8bf7\u5148\u5728\u4e0a\u65b9\u8f93\u5165\u95ee\u9898\u63cf\u8ff0\uff0c\u518d\u70b9\u51fb\u91cd\u65b0\u751f\u6210\u3002")
+        st.caption(
+            "操作提示：先描述问题，再点“有错误点击重新生成预览”。检查通过后再进入下一步。"
+        )
+        if report_text:
+            st.warning(f"\u4f60\u53cd\u9988\u7684\u95ee\u9898: \u300c{report}\u300d")
+            if st.session_state.single_check_done and st.session_state.get("checked_report", "") == report_text:
+                has_errors = False
+                has_warnings = False
+                if not st.session_state.single_check_issues:
+                    st.success("本次检查未发现问题。")
+                for level, msg in st.session_state.single_check_issues:
+                    if level == "error":
+                        has_errors = True
+                        st.error(msg)
+                    elif level == "warning":
+                        has_warnings = True
+                        st.warning(msg)
+                    elif level == "success":
+                        st.success(msg)
+
+                action_col1, action_col2 = st.columns(2)
+                with action_col1:
+                    if st.button(
+                        "有问题继续生成修复预览",
+                        use_container_width=True,
+                        key="btn_preview_continue_fix",
+                    ):
+                        st.session_state.single_check_done = False
+                        st.session_state.preview_confirmed = False
+                        st.rerun()
+                with action_col2:
+                    if st.button(
+                        "无问题，进行下一步",
+                        type="primary",
+                        use_container_width=True,
+                        key="btn_preview_no_issue_next",
+                    ):
+                        if has_errors:
+                            st.error("仍存在错误项，请继续修复后再进行下一步。")
+                            st.session_state.preview_confirmed = False
+                        else:
+                            st.session_state.preview_confirmed = True
+                            st.rerun()
+            else:
+                st.info("请先点击“有错误点击重新生成预览”，确认问题是否已解决。")
 
     if not st.session_state.preview_confirmed:
-        st.info("请先确认上方预览效果无误，才能继续下一步")
+        if st.session_state.get("preview_report", "").strip():
+            st.info("已记录问题，请先点击“有错误点击重新生成预览”；确认无问题后点击“无问题，进行下一步”。")
+        else:
+            st.info("\u8bf7\u5148\u786e\u8ba4\u4e0a\u65b9\u9884\u89c8\u6548\u679c\u65e0\u8bef\uff0c\u624d\u80fd\u7ee7\u7eed\u4e0b\u4e00\u6b65")
         st.stop()
 
     # ── step 1: preview samples ──
