@@ -15,15 +15,30 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 from psd_tools import PSDImage
 
+import subprocess as _sp
+import datetime as _dt
+
 APP_DIR = Path(__file__).parent
 FONTS_DIR = APP_DIR / "fonts"
 
+def _build_tag():
+    try:
+        sha = _sp.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(APP_DIR), stderr=_sp.DEVNULL).decode().strip()
+    except Exception:
+        sha = "unknown"
+    return f"build {sha} · {_dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+
+_BUILD_TAG = _build_tag()
+
 st.set_page_config(page_title="批量邀请函生成", page_icon="📨", layout="wide")
 st.markdown(
-    """
+    f"""
     <div class="apple-hero">
       <h1>批量邀请函生成工具</h1>
       <p>上传模板与名单，预览确认后一键批量生成并下载压缩包。</p>
+      <p style="font-size:0.72rem;color:rgba(142,142,147,0.7);margin-top:4px;">{_BUILD_TAG}</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -273,22 +288,32 @@ def rounded_corner_mask(size, radius):
 
 
 def replace_qr(background, qr_image, qr_box, original_layer_img=None, corner_radius=0):
-    tw = qr_box[2] - qr_box[0]
-    th = qr_box[3] - qr_box[1]
-    qr_resized = qr_image.convert('RGBA').resize((tw, th), Image.LANCZOS)
-    if original_layer_img is not None:
-        layer_resized = original_layer_img.convert('RGBA').resize((tw, th), Image.LANCZOS)
-        mask = layer_resized.split()[3]
-    elif corner_radius > 0:
-        mask = rounded_corner_mask((tw, th), corner_radius)
-    else:
+    try:
+        tw = qr_box[2] - qr_box[0]
+        th = qr_box[3] - qr_box[1]
+        if tw <= 0 or th <= 0:
+            return background
+        qr_resized = qr_image.convert('RGBA').resize((tw, th), Image.LANCZOS)
         mask = None
-    if mask:
-        bg_region = background.crop(qr_box).convert('RGBA')
-        composite = Image.composite(qr_resized, bg_region, mask)
-        background.paste(composite, (qr_box[0], qr_box[1]))
-    else:
-        background.paste(qr_resized, (qr_box[0], qr_box[1]))
+        if original_layer_img is not None:
+            if original_layer_img.mode == 'L':
+                mask = original_layer_img.resize((tw, th), Image.LANCZOS)
+            else:
+                layer_resized = original_layer_img.convert('RGBA').resize((tw, th), Image.LANCZOS)
+                mask = layer_resized.split()[3]
+        elif corner_radius > 0:
+            mask = rounded_corner_mask((tw, th), corner_radius)
+        if mask:
+            bg_region = background.crop(qr_box).convert('RGBA')
+            composite = Image.composite(qr_resized, bg_region, mask)
+            background.paste(composite, (qr_box[0], qr_box[1]))
+        else:
+            background.paste(qr_resized, (qr_box[0], qr_box[1]))
+    except Exception:
+        background.paste(
+            qr_image.convert('RGBA').resize(
+                (qr_box[2] - qr_box[0], qr_box[3] - qr_box[1]), Image.LANCZOS),
+            (qr_box[0], qr_box[1]))
     return background
 
 
@@ -760,7 +785,7 @@ if template_file and has_list:
             qr_box = detect_qr_region(psd)
             qr_layer = get_qr_layer(psd)
             qr_layer_img = qr_layer.composite() if qr_layer else None
-            qr_real_mask = extract_qr_mask(psd)
+            _unused_mask = extract_qr_mask(psd)  # kept for diagnostics; alpha now from qr_layer_img
             original_img = psd.composite()
             bg = composite_background(psd)
             img_width = psd.width
@@ -779,7 +804,6 @@ if template_file and has_list:
             font_color = (255, 255, 255, 255)
             qr_box = None
             qr_layer_img = None
-            qr_real_mask = None
             layer_names = []
             positions = {}
 
@@ -1039,7 +1063,7 @@ if template_file and has_list:
     # ── QR replacement ──
     if qr_file and qr_box:
         qr_img = Image.open(qr_file).convert("RGBA")
-        bg = replace_qr(bg, qr_img, qr_box, real_mask=qr_real_mask)
+        bg = replace_qr(bg, qr_img, qr_box, original_layer_img=qr_layer_img)
 
     def build_text_items(row):
         items = []
