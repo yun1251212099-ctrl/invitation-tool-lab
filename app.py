@@ -905,7 +905,7 @@ if template_file and has_list:
 
     # ── editable name preview ──
     if mapping_ok:
-        preview_n = min(60, len(rows))
+        preview_n = min(200, len(rows))
         st.markdown(f"**名单预览（前 {preview_n} 名）：**")
         preview_data = []
         col_map = {}
@@ -1109,9 +1109,7 @@ if template_file and has_list:
         ):
             preview_issue_dialog()
 
-    if not st.session_state.preview_confirmed:
-        st.info("请先确认上方预览效果无误，才能继续下一步")
-        st.stop()
+    st.caption("可选：可先生成预览确认，也可直接进入下一步批量生成。")
 
 
     # ── step 1: preview samples ──
@@ -1150,6 +1148,23 @@ if template_file and has_list:
         progress.progress(1.0, text=f"\u9884\u89c8\u5b8c\u6210! \u5171 {preview_count} \u5f20")
         st.session_state["preview_imgs"] = preview_imgs
         st.session_state["preview_issues"] = all_issues
+
+    # ── direct generate-all (optional, no preview required) ──
+    st.markdown("---")
+    st.markdown("### 直接生成全部（可跳过预览）")
+    if st.button(f"直接生成全部 {total} 张", type="primary", use_container_width=True, key="btn_generate_all_direct"):
+        progress2 = st.progress(0, text="正在生成...")
+        all_img_data = []
+        for i, row in enumerate(rows):
+            fname = build_filename(row)
+            img = generate_one(bg, build_text_items(row), img_width, font_color, font_path)
+            img_buf = io.BytesIO()
+            img.save(img_buf, format="PNG")
+            all_img_data.append((f"{fname}.png", img_buf.getvalue()))
+            progress2.progress((i + 1) / total, text=f"正在生成 [{i+1}/{total}] {fname}")
+        progress2.progress(1.0, text=f"全部生成完成! 共 {total} 张")
+        st.session_state["all_img_data"] = all_img_data
+        st.session_state["check_done"] = False
 
     if "preview_imgs" in st.session_state and st.session_state["preview_imgs"]:
         preview_imgs = st.session_state["preview_imgs"]
