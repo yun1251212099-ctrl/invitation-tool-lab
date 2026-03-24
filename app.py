@@ -94,36 +94,22 @@ st.markdown(
         font-size: 0.86rem;
         color: rgba(128, 128, 132, 0.95);
     }
-    [data-testid="stFileUploaderDropzone"] {
-        border-radius: 14px;
-        border: 1px solid rgba(120, 120, 128, 0.35);
-        padding-top: 0.45rem;
-        padding-bottom: 0.45rem;
-    }
-    [data-testid="stFileUploaderDropzoneInstructions"] {
-        display: none;
-    }
-    [data-testid="stFileUploader"] small {
-        font-size: 0.9rem;
-        color: rgba(128, 128, 132, 0.92);
-    }
+    /* file_uploader: minimal */
+    [data-testid="stFileUploaderDropzone"] { border: none; background: transparent; padding: 0; }
+    [data-testid="stFileUploaderDropzoneInstructions"] { display: none; }
+    [data-testid="stFileUploader"] label { display: none; }
+    [data-testid="stFileUploader"] small { display: none; }
     [data-testid="stFileUploaderDropzone"] button {
-        border-radius: 10px;
+        border-radius: 980px; min-height: 2.75rem; font-size: 0;
+        position: relative; width: 100%; padding: 0 1.5rem;
     }
-    [data-testid="stFileUploaderDropzone"] button p {
-        font-size: 0;
+    [data-testid="stFileUploaderDropzone"] button::after {
+        content: "点击上传"; font-size: 0.94rem; font-weight: 400; line-height: 1;
     }
-    [data-testid="stFileUploaderDropzone"] button p::after {
-        content: "\70B9\51FB\4E0A\4F20";
-        font-size: 1rem;
-    }
-    [data-testid="stButton"] > button {
-        border-radius: 12px;
-        min-height: 2.7rem;
-    }
-    [data-testid="stDownloadButton"] > button {
-        border-radius: 12px;
-        min-height: 2.8rem;
+    /* Apple buttons */
+    [data-testid="stButton"] > button, [data-testid="stDownloadButton"] > button {
+        border-radius: 980px; min-height: 2.75rem; padding: 0 1.5rem;
+        font-size: 0.94rem; font-weight: 400;
     }
     </style>
     """,
@@ -286,17 +272,23 @@ def rounded_corner_mask(size, radius):
     return mask
 
 
-def replace_qr(background, qr_image, qr_box, real_mask=None, corner_radius=3):
+def replace_qr(background, qr_image, qr_box, original_layer_img=None, corner_radius=0):
     tw = qr_box[2] - qr_box[0]
     th = qr_box[3] - qr_box[1]
-    qr_resized = qr_image.convert("RGBA").resize((tw, th), Image.LANCZOS)
-    if real_mask is not None:
-        mask = real_mask.resize((tw, th), Image.LANCZOS)
-    else:
+    qr_resized = qr_image.convert('RGBA').resize((tw, th), Image.LANCZOS)
+    if original_layer_img is not None:
+        layer_resized = original_layer_img.convert('RGBA').resize((tw, th), Image.LANCZOS)
+        mask = layer_resized.split()[3]
+    elif corner_radius > 0:
         mask = rounded_corner_mask((tw, th), corner_radius)
-    bg_region = background.crop(qr_box).convert("RGBA")
-    composite = Image.composite(qr_resized, bg_region, mask)
-    background.paste(composite, (qr_box[0], qr_box[1]))
+    else:
+        mask = None
+    if mask:
+        bg_region = background.crop(qr_box).convert('RGBA')
+        composite = Image.composite(qr_resized, bg_region, mask)
+        background.paste(composite, (qr_box[0], qr_box[1]))
+    else:
+        background.paste(qr_resized, (qr_box[0], qr_box[1]))
     return background
 
 
@@ -654,6 +646,52 @@ def parse_spreadsheet(uploaded):
     return rows, fields
 
 
+
+def parse_manual_lines(raw_text, mode):
+    rows = []
+    for line in raw_text.splitlines():
+        line = line.strip()
+        if not line: continue
+        if mode == "只有姓名":
+            rows.append({"姓名": line})
+            continue
+        parts = [p.strip() for p in line.replace("，", ",").split(",", 1)]
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            return None, f'格式错误：{line}'
+        rows.append({"姓名": parts[0], "公司名": parts[1]})
+    return rows, None
+
+@st.dialog("手动输入名单", width="large")
+def manual_input_dialog():
+    mode = st.radio("名单类型", ["只有姓名", "姓名和公司"], horizontal=True, key="manual_list_mode")
+    placeholder = "张三\n李四\n王五"
+    if mode == "姓名和公司": placeholder = "张三, ABC公司\n李四, XYZ集团"
+    st.caption("每行一条名单")
+    raw_text = st.text_area("名单内容", key="manual_list_raw_text", height=260, placeholder=placeholder)
+    if st.button("确认", type="primary", use_container_width=True, key="manual_list_confirm_btn"):
+        rows, err = parse_manual_lines(raw_text, mode)
+        if err: st.error(err)
+        elif not rows: st.warning('请至少输入一条名单。')
+        else:
+            st.session_state["manual_list_rows"] = rows
+            st.rerun()
+
+@st.dialog("发现问题", width="large")
+def preview_issue_dialog():
+    report = st.text_input("输入问题描述", key="dlg_issue_report")
+    if st.button("确认重新生成", type="primary", use_container_width=True, key="dlg_issue_regen"):
+        if report.strip():
+            st.session_state["_do_regen"] = True
+            st.rerun()
+        else: st.warning("请先输入问题描述")
+    issues = st.session_state.get("single_check_issues", [])
+    if issues:
+        st.caption("分析结果：")
+        for level, msg in issues:
+            if level == "error": st.error(msg)
+            elif level == "warning": st.warning(msg)
+            elif level == "success": st.success(msg)
+
 # ── UI ───────────────────────────────────────────────────
 
 st.markdown('<div class="apple-section-title">第一步：上传文件</div>', unsafe_allow_html=True)
@@ -674,18 +712,21 @@ with upload_col1:
     )
 
 with upload_col2:
-    list_file = st.file_uploader(
-        "2. 上传名单",
-        type=LIST_EXTENSIONS,
-        help="CSV / Excel (.xlsx) / Excel (.xls)",
-    )
+    list_btn_col1, list_btn_col2 = st.columns([1, 1])
+    with list_btn_col1:
+        list_file = st.file_uploader("上传名单文件", type=LIST_EXTENSIONS, label_visibility="collapsed")
+    with list_btn_col2:
+        if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
+            manual_input_dialog()
     st.markdown(
-        '<div class="apple-info-card"><strong>名单规则</strong>'
-        '<span>支持 CSV、XLSX、XLS。建议至少包含“公司名”和“人名”字段，自动识别更准确。</span>'
-        '<br><span style="font-size:0.84rem;color:rgba(128,128,132,0.75);">如需修正数据，重新上传名单文件即可生效。</span>'
+        '<div class="apple-info-card"><strong>名单规则（二选一）</strong>'
+        '<span>支持 CSV、XLSX、XLS。</span>'
         '</div>',
         unsafe_allow_html=True,
     )
+    manual_rows = st.session_state.get("manual_list_rows", [])
+    if manual_rows:
+        st.caption(f"已手动输入 {len(manual_rows)} 条名单")
 
 with upload_col3:
     qr_file = st.file_uploader(
@@ -702,7 +743,8 @@ with upload_col3:
 
 st.caption("上传方式：可拖拽文件到上传框，或点击“选择文件”按钮上传。")
 
-if template_file and list_file:
+has_list = list_file or manual_rows
+if template_file and has_list:
     suffix = file_suffix(template_file)
     is_psd = suffix in PSD_EXTENSIONS
 
@@ -716,6 +758,8 @@ if template_file and list_file:
             font_color = get_font_color(psd)
             font_size = 51
             qr_box = detect_qr_region(psd)
+            qr_layer = get_qr_layer(psd)
+            qr_layer_img = qr_layer.composite() if qr_layer else None
             qr_real_mask = extract_qr_mask(psd)
             original_img = psd.composite()
             bg = composite_background(psd)
@@ -734,11 +778,16 @@ if template_file and list_file:
             font_size = 51
             font_color = (255, 255, 255, 255)
             qr_box = None
+            qr_layer_img = None
             qr_real_mask = None
             layer_names = []
             positions = {}
 
-    rows, fields = parse_spreadsheet(list_file)
+    if list_file:
+        rows, fields = parse_spreadsheet(list_file)
+    else:
+        rows = manual_rows
+        fields = list(rows[0].keys()) if rows else []
     if not rows:
         st.warning("名单为空或读取失败，请检查文件。")
         st.stop()
