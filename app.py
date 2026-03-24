@@ -18,12 +18,12 @@ from psd_tools import PSDImage
 APP_DIR = Path(__file__).parent
 FONTS_DIR = APP_DIR / "fonts"
 
-st.set_page_config(page_title="批量邀请函生成（测试版）", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="批量邀请函生成", page_icon="📨", layout="wide")
 st.markdown(
     """
     <div class="apple-hero">
-      <h1>批量邀请函生成工具（测试版）</h1>
-      <p>测试环境：用于新功能验证，不影响正式版网址。</p>
+      <h1>批量邀请函生成工具</h1>
+      <p>上传模板与名单，预览确认后一键批量生成并下载压缩包。</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -109,6 +109,13 @@ st.markdown(
     }
     [data-testid="stFileUploaderDropzone"] button {
         border-radius: 10px;
+    }
+    [data-testid="stFileUploaderDropzone"] button p {
+        font-size: 0;
+    }
+    [data-testid="stFileUploaderDropzone"] button p::after {
+        content: "\70B9\51FB\4E0A\4F20";
+        font-size: 1rem;
     }
     [data-testid="stButton"] > button {
         border-radius: 12px;
@@ -842,26 +849,42 @@ if template_file and list_file:
         st.stop()
 
     # ── font selection ──
-    st.markdown("### 字体选择")
+    st.markdown("### \u5b57\u4f53\u9009\u62e9")
 
-    custom_font_file = st.file_uploader(
-        "上传自定义字体 (可选, 支持 .ttf / .otf)",
-        type=["ttf", "otf"],
-        help="不上传则使用默认字体 OPPO Sans 4.0",
+    if is_psd:
+        psd_font_names = set()
+        for _tl in psd.descendants():
+            if _tl.kind == "type":
+                try:
+                    _ss = _tl.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
+                    _fs = _tl.engine_dict.get("ResourceDict", {}).get("FontSet", [])
+                    _fi = int(_ss.get("Font", 0))
+                    if _fi < len(_fs):
+                        psd_font_names.add(_fs[_fi].get("Name", ""))
+                except Exception:
+                    pass
+        if psd_font_names:
+            with st.expander("\u6a21\u677f\u5185\u6807\u6ce8\u5b57\u4f53\uff08\u4ec5\u4f9b\u53c2\u8003\uff09", expanded=False):
+                st.caption("\u4ee5\u4e0b\u662f PSD \u56fe\u5c42\u4e2d\u8bb0\u5f55\u7684\u5b57\u4f53\u540d\uff0c\u5b9e\u9645\u6e32\u67d3\u4ee5\u4e0b\u65b9\u9009\u62e9\u7684\u5b57\u4f53\u4e3a\u51c6\u3002")
+                for _fn in sorted(psd_font_names):
+                    st.text(f"  \u2022 {_fn}")
+
+    font_source = st.radio(
+        "字体来源",
+        ["\u9ed8\u8ba4 OPPO \u5b57\u4f53", "\u7535\u8111\u672c\u5730\u5b57\u4f53", "\u4e0a\u4f20\u81ea\u5b9a\u4e49\u5b57\u4f53"],
+        horizontal=True,
+        help="\u9009\u62e9\u5b57\u4f53\u6765\u6e90\uff1a\u9ed8\u8ba4\u5185\u7f6e\u3001\u670d\u52a1\u5668\u672c\u5730\u5b57\u4f53\u3001\u6216\u4e0a\u4f20 .ttf/.otf \u6587\u4ef6",
     )
+    custom_font_file = None
 
-    if custom_font_file:
-        font_tmp = tempfile.NamedTemporaryFile(suffix=file_suffix(custom_font_file), delete=False)
-        font_tmp.write(custom_font_file.getvalue())
-        font_tmp.flush()
-        font_path = font_tmp.name
-        try:
-            family, style = ImageFont.truetype(font_path, 20).getname()
-            st.success(f"已加载自定义字体：{family} ({style})")
-        except Exception as e:
-            st.error(f"字体文件无法加载: {e}")
-            font_path = get_default_font_path()
-    else:
+    if font_source == "\u9ed8\u8ba4 OPPO \u5b57\u4f53":
+        font_path = get_default_font_path()
+        if font_path:
+            st.success("\u5df2\u4f7f\u7528\u9ed8\u8ba4\u5b57\u4f53 OPPO Sans 4.0")
+        else:
+            st.error("\u9ed8\u8ba4\u5b57\u4f53\u672a\u627e\u5230\uff0c\u8bf7\u5207\u6362\u5230\u201c\u4e0a\u4f20\u81ea\u5b9a\u4e49\u5b57\u4f53\u201d")
+            st.stop()
+    elif font_source == "\u7535\u8111\u672c\u5730\u5b57\u4f53":
         all_fonts = scan_fonts()
         font_names = list(all_fonts.keys())
         if font_names:
@@ -871,26 +894,68 @@ if template_file and list_file:
                     default_idx = i
                     break
             selected_font = st.selectbox(
-                "或从已有字体中选择",
+                "\u7535\u8111\u672c\u5730\u5b57\u4f53\u9009\u62e9",
                 font_names,
                 index=default_idx,
-                help=f"已扫描到 {len(font_names)} 个可用字体",
+                help=f"\u5df2\u626b\u63cf\u5230 {len(font_names)} \u4e2a\u53ef\u7528\u5b57\u4f53",
             )
             font_path = all_fonts[selected_font]
         else:
+            st.warning("\u672a\u626b\u63cf\u5230\u672c\u5730\u5b57\u4f53\uff0c\u5df2\u56de\u9000\u5230\u9ed8\u8ba4\u5b57\u4f53")
             font_path = get_default_font_path()
-            if font_path:
-                st.info("使用默认字体 OPPO Sans 4.0")
-            else:
-                st.error("未找到任何可用字体，请上传 .ttf 字体文件")
+            if not font_path:
+                st.error("\u672a\u627e\u5230\u4efb\u4f55\u53ef\u7528\u5b57\u4f53")
                 st.stop()
+    else:
+        custom_font_file = st.file_uploader(
+            "\u4e0a\u4f20 .ttf / .otf \u5b57\u4f53\u6587\u4ef6",
+            type=["ttf", "otf"],
+        )
+        if custom_font_file:
+            font_tmp = tempfile.NamedTemporaryFile(suffix=file_suffix(custom_font_file), delete=False)
+            font_tmp.write(custom_font_file.getvalue())
+            font_tmp.flush()
+            font_path = font_tmp.name
+            try:
+                family, style = ImageFont.truetype(font_path, 20).getname()
+                st.success(f"\u5df2\u52a0\u8f7d\u81ea\u5b9a\u4e49\u5b57\u4f53\uff1a{family} ({style})")
+            except Exception as e:
+                st.error(f"\u5b57\u4f53\u6587\u4ef6\u65e0\u6cd5\u52a0\u8f7d: {e}")
+                font_path = get_default_font_path()
+        else:
+            st.info("\u8bf7\u4e0a\u4f20\u5b57\u4f53\u6587\u4ef6\uff0c\u6216\u5207\u6362\u5230\u5176\u4ed6\u5b57\u4f53\u6765\u6e90")
+            font_path = get_default_font_path()
+
+    # ── re-calibrate positions for the chosen font ──
+    if is_psd and font_path:
+        positions = get_text_layer_positions(psd, font_path)
+        positions = calibrate_stroke_weights(
+            psd, positions, original_img, bg, font_path, font_color, img_width)
+        if enable_company and company_layer and company_layer in positions:
+            company_y = positions[company_layer][0]
+            company_fsize = positions[company_layer][1]
+            company_stroke = positions[company_layer][3]
+        if enable_name and name_layer and name_layer in positions:
+            name_y = positions[name_layer][0]
+            name_fsize = positions[name_layer][1]
+            name_stroke = positions[name_layer][3]
+
+    # ── font weight slider ──
+    auto_stroke = max(company_stroke, name_stroke)
+    stroke_override = st.slider(
+        "\u5b57\u4f53\u7c97\u7ec6\u5fae\u8c03",
+        min_value=0, max_value=4, value=auto_stroke,
+        help="\u50cf\u7d20\u6821\u51c6\u9ed8\u8ba4\u503c\u4e3a {}\uff0c\u5411\u53f3\u62d6\u52a8\u52a0\u7c97\uff0c\u5411\u5de6\u53d8\u7ec6\u3002\u8c03\u6574\u540e\u9884\u89c8\u81ea\u52a8\u66f4\u65b0\u3002".format(auto_stroke),
+    )
+    company_stroke = stroke_override
+    name_stroke = stroke_override
 
     if not is_psd:
         fcol1, fcol2 = st.columns(2)
         with fcol1:
-            font_size = st.number_input("字号", 10, 200, int(font_size))
+            font_size = st.number_input("\u5b57\u53f7", 10, 200, int(font_size))
         with fcol2:
-            color_hex = st.color_picker("文字颜色", "#FFFFFF")
+            color_hex = st.color_picker("\u6587\u5b57\u989c\u8272", "#FFFFFF")
             r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
             font_color = (r, g, b, 255)
 
@@ -961,12 +1026,13 @@ if template_file and list_file:
                 st.rerun()
     with confirm_col2:
         st.markdown(
-            '<div class="action-card"><strong>路径 B：发现问题先修复</strong><span>输入问题后，先重新生成预览并检查，再决定是否进入下一步。</span></div>',
+            '<div class="action-card"><strong>路径 B：发现问题先修复</strong>'
+            '<span>输入问题后系统自动识别并尝试修复，无法自动修复时可生成问题日志。</span></div>',
             unsafe_allow_html=True,
         )
         report = st.text_input(
             "请描述发现的问题",
-            placeholder="\u4f8b\u5982: \u5b57\u4f53\u504f\u5c0f / \u4f4d\u7f6e\u504f\u79fb / \u95f4\u8ddd\u4e0d\u5bf9...",
+            placeholder="例如: 字体偏细 / 字体偏小 / 位置偏移 / 间距不对...",
             key="preview_report",
         )
         report_text = report.strip()
@@ -975,37 +1041,119 @@ if template_file and list_file:
             st.session_state.single_check_done = False
             st.session_state.single_check_issues = []
 
-        if st.button(
-            "有错误点击重新生成预览",
-            use_container_width=True,
-            key="btn_preview_regen_check",
-        ):
-            if report_text:
-                regen_img = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
-                st.session_state["regen_preview"] = regen_img
-                text_items_now = build_text_items(first)
-                basic_issues = check_image_quality(regen_img, text_items_now, img_width, qr_box, font_path)
-                diff_issues = compare_preview_quality(
-                    original_img,
-                    regen_img,
-                    text_items_now,
-                    img_width,
-                    qr_box,
-                    font_path,
-                    use_custom_font=bool(custom_font_file),
-                )
-                st.session_state.single_check_issues = basic_issues + diff_issues
-                st.session_state.single_check_done = True
-                st.session_state.checked_report = report_text
-                st.session_state.preview_confirmed = False
-                st.rerun()
+        _FIX_RULES = [
+            (["粗细", "加粗", "偏细", "太细", "变细", "细了"],
+             "stroke", "字体粗细"),
+            (["偏大", "偏小", "字号", "太大", "太小", "大小"],
+             "fontsize", "字体大小"),
+            (["偏移", "位置", "偏了", "不居中", "居中"],
+             "position", "文字位置"),
+            (["间距", "行距", "字距", "间隔"],
+             "spacing", "文字间距"),
+        ]
+
+        def _detect_fix(text):
+            for kws, fid, lab in _FIX_RULES:
+                for kw in kws:
+                    if kw in text:
+                        return fid, lab
+            return None, None
+
+        _fix_id, _fix_label = _detect_fix(report_text) if report_text else (None, None)
+
+        if report_text and _fix_id:
+            st.info(f"已识别问题类型：**{_fix_label}**")
+
+        fix_col1, fix_col2 = st.columns(2)
+        with fix_col1:
+            if report_text and _fix_id in ("stroke", "fontsize"):
+                if st.button(f"一键修复：调整{_fix_label}", use_container_width=True, key="btn_auto_fix"):
+                    _cs = company_stroke
+                    _ns = name_stroke
+                    _cf = company_fsize
+                    _nf = name_fsize
+                    if _fix_id == "stroke":
+                        _cs = min(4, _cs + 1)
+                        _ns = min(4, _ns + 1)
+                    elif _fix_id == "fontsize":
+                        if any(k in report_text for k in ["小", "偏小", "太小"]):
+                            _cf += 2
+                            _nf += 2
+                        else:
+                            _cf = max(10, _cf - 2)
+                            _nf = max(10, _nf - 2)
+                    regen_items = []
+                    if enable_company and company_field:
+                        regen_items.append((first[company_field], company_y, _cf, _cs))
+                    if enable_name and name_field:
+                        regen_items.append((first[name_field], name_y, _nf, _ns))
+                    regen_img = generate_one(bg, regen_items, img_width, font_color, font_path)
+                    st.session_state["regen_preview"] = regen_img
+                    basic_issues = check_image_quality(regen_img, regen_items, img_width, qr_box, font_path)
+                    diff_issues = compare_preview_quality(
+                        original_img, regen_img, regen_items,
+                        img_width, qr_box, font_path,
+                        use_custom_font=bool(custom_font_file),
+                    )
+                    st.session_state.single_check_issues = basic_issues + diff_issues
+                    st.session_state.single_check_done = True
+                    st.session_state.checked_report = report_text
+                    st.session_state.preview_confirmed = False
+                    st.rerun()
             else:
-                st.warning("\u8bf7\u5148\u5728\u4e0a\u65b9\u8f93\u5165\u95ee\u9898\u63cf\u8ff0\uff0c\u518d\u70b9\u51fb\u91cd\u65b0\u751f\u6210\u3002")
-        st.caption(
-            "操作提示：先描述问题，再点“有错误点击重新生成预览”。检查通过后再进入下一步。"
-        )
+                if st.button(
+                    "有错误点击重新生成预览",
+                    use_container_width=True,
+                    key="btn_preview_regen_check",
+                ):
+                    if report_text:
+                        regen_img = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
+                        st.session_state["regen_preview"] = regen_img
+                        text_items_now = build_text_items(first)
+                        basic_issues = check_image_quality(regen_img, text_items_now, img_width, qr_box, font_path)
+                        diff_issues = compare_preview_quality(
+                            original_img, regen_img, text_items_now,
+                            img_width, qr_box, font_path,
+                            use_custom_font=bool(custom_font_file),
+                        )
+                        st.session_state.single_check_issues = basic_issues + diff_issues
+                        st.session_state.single_check_done = True
+                        st.session_state.checked_report = report_text
+                        st.session_state.preview_confirmed = False
+                        st.rerun()
+                    else:
+                        st.warning("请先输入问题描述再点击。")
+
+        with fix_col2:
+            if report_text and _fix_id is None:
+                if st.button("生成问题日志", use_container_width=True, key="btn_gen_issue_log"):
+                    import datetime
+                    log_lines = [
+                        "--- 问题日志 ---",
+                        f"时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        f"问题描述: {report_text}",
+                        "自动识别: 未匹配到已知修复方案",
+                        "",
+                        "当前参数:",
+                        f"  字体: {Path(font_path).name}",
+                        f"  公司名字号={company_fsize}, 粗细={company_stroke}",
+                        f"  人名字号={name_fsize}, 粗细={name_stroke}",
+                        f"  图片尺寸: {img_width}x{img_height}",
+                        "",
+                        "建议: 调整上方“字体粗细微调”滑块，或切换字体来源。",
+                    ]
+                    st.session_state["issue_log"] = "\n".join(log_lines)
+                    st.rerun()
+
+        if st.session_state.get("issue_log"):
+            st.markdown("**问题日志（可复制）:**")
+            st.code(st.session_state["issue_log"], language="text")
+            st.caption("请复制以上日志发送给开发者协助排查。")
+
+        st.caption("操作提示：输入问题后系统自动识别并尝试修复；无法识别时可生成问题日志。")
+
         if report_text:
-            st.warning(f"\u4f60\u53cd\u9988\u7684\u95ee\u9898: \u300c{report}\u300d")
+            st.warning(f"你反馈的问题: 「{report}」")
             if st.session_state.single_check_done and st.session_state.get("checked_report", "") == report_text:
                 has_errors = False
                 has_warnings = False
@@ -1039,13 +1187,16 @@ if template_file and list_file:
                         key="btn_preview_no_issue_next",
                     ):
                         if has_errors:
-                            st.error("仍存在错误项，请继续修复后再进行下一步。")
+                            st.error("仍存在错误项，请继续修复。")
                             st.session_state.preview_confirmed = False
                         else:
                             st.session_state.preview_confirmed = True
                             st.rerun()
             else:
-                st.info("请先点击“有错误点击重新生成预览”，确认问题是否已解决。")
+                if _fix_id:
+                    st.info(f"请点击上方“一键修复”按钮尝试自动修复。")
+                else:
+                    st.info("请点击“有错误点击重新生成预览”或“生成问题日志”。")
 
     if not st.session_state.preview_confirmed:
         if st.session_state.get("preview_report", "").strip():
