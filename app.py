@@ -25,6 +25,92 @@ except ImportError:
 
 import subprocess as _sp
 import datetime as _dt
+import re as _re
+
+_EMOJI_RE = _re.compile(
+    "["
+    "\U0001F600-\U0001F64F"
+    "\U0001F300-\U0001F5FF"
+    "\U0001F680-\U0001F6FF"
+    "\U0001F1E0-\U0001F1FF"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA00-\U0001FA6F"
+    "\U0001FA70-\U0001FAFF"
+    "\U0000FE0F"
+    "\U0000200D"
+    "\U00002702-\U000027B0"
+    "\U000023E9-\U000023F3"
+    "\U000023F8-\U000023FA"
+    "\U0000231A-\U0000231B"
+    "\U000025AA-\U000025AB"
+    "\U000025B6"
+    "\U000025C0"
+    "\U000025FB-\U000025FE"
+    "\U00002614-\U00002615"
+    "\U00002648-\U00002653"
+    "\U0000267F"
+    "\U00002693"
+    "\U000026A1"
+    "\U000026AA-\U000026AB"
+    "\U000026BD-\U000026BE"
+    "\U000026C4-\U000026C5"
+    "\U000026D4"
+    "\U000026EA"
+    "\U000026F2-\U000026F3"
+    "\U000026F5"
+    "\U000026FA"
+    "\U000026FD"
+    "\U00002934-\U00002935"
+    "\U00002B05-\U00002B07"
+    "\U00002B1B-\U00002B1C"
+    "\U00002B50"
+    "\U00002B55"
+    "\U00003030"
+    "\U0000303D"
+    "\U00003297"
+    "\U00003299"
+    "]+",
+    flags=_re.UNICODE,
+)
+
+def _strip_emoji(text: str) -> str:
+    return _EMOJI_RE.sub("", text).strip()
+
+
+def _is_emoji(ch: str) -> bool:
+    return bool(_EMOJI_RE.fullmatch(ch))
+
+
+_EMOJI_FONT_PATHS = [
+    "/System/Library/Fonts/Apple Color Emoji.ttc",
+    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+    "/usr/share/fonts/noto-cjk/NotoColorEmoji.ttf",
+    "C:\\Windows\\Fonts\\seguiemj.ttf",
+]
+_APPLE_EMOJI_VALID_SIZES = [20, 26, 32, 40, 48, 52, 64, 96, 160]
+_emoji_font_cache: dict = {}
+
+
+def _get_emoji_font(size: int):
+    if size in _emoji_font_cache:
+        return _emoji_font_cache[size]
+    for p in _EMOJI_FONT_PATHS:
+        if not os.path.exists(p):
+            continue
+        try_sizes = [size]
+        if "Apple Color Emoji" in p:
+            best = min(_APPLE_EMOJI_VALID_SIZES, key=lambda s: abs(s - size))
+            try_sizes = [best]
+        for sz in try_sizes:
+            try:
+                f = ImageFont.truetype(p, sz, index=0)
+                _emoji_font_cache[size] = f
+                return f
+            except Exception:
+                continue
+    _emoji_font_cache[size] = None
+    return None
+
 
 APP_DIR = Path(__file__).parent
 FONTS_DIR = APP_DIR / "fonts"
@@ -65,6 +151,12 @@ _BUILD_TAG = _build_tag()
 
 st.set_page_config(page_title="批量邀请函工作流-M2.0", page_icon="📨", layout="wide")
 _init_self_heal()
+
+for _k in ["all_img_data", "preview_imgs", "check_done", "check_issues",
+           "list_issues", "fix_log_text",
+           "_do_regen", "single_check_issues"]:
+    if _k not in st.session_state:
+        st.session_state[_k] = None
 st.markdown(
     f"""
     <div class="apple-hero">
@@ -163,23 +255,22 @@ st.markdown(
         border-radius: 980px; min-height: 2.75rem; padding: 0 1.5rem;
         font-size: 0.94rem; font-weight: 400;
     }
+    .check-pass-banner {
+        border: 2px solid #38a169;
+        border-radius: 12px;
+        padding: 0.7rem 1rem;
+        margin-bottom: 0.55rem;
+        background: #f0fff4;
+        text-align: center;
+        font-weight: 500;
+        color: #38a169;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-with st.sidebar:
-    st.caption(_BUILD_TAG)
-    heal_log = st.session_state.get("_self_heal_log", [])
-    if heal_log:
-        with st.expander(f"自愈日志 ({len(heal_log)})", expanded=False):
-            st.code("\n".join(heal_log[-30:]), language="text")
-            st.download_button(
-                "下载自愈日志",
-                "\n".join(heal_log),
-                file_name="self_heal_log.txt",
-                mime="text/plain",
-            )
+_heal_log = st.session_state.get("_self_heal_log", [])
 
 PSD_EXTENSIONS = (".psd", ".psb")
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp")
@@ -240,6 +331,10 @@ def load_psd(uploaded):
         tmp.write(uploaded.getvalue())
         tmp.flush()
         return PSDImage.open(tmp.name)
+
+
+def _template_cache_key(uploaded):
+    return f"{uploaded.name}:{uploaded.size}"
 
 
 def load_image(uploaded):
@@ -488,17 +583,123 @@ def calibrate_stroke_weights(psd, positions, original_img, bg, font_path, color,
     return updated
 
 
-def draw_centered_text(draw, font, text, center_y, img_width, color, stroke_width=0):
-    """Draw text horizontally and vertically centered using standard draw.text."""
-    bbox = font.getbbox(text)
-    text_w = bbox[2] - bbox[0]
-    x = (img_width - text_w) // 2
-    y = center_y - (bbox[1] + bbox[3]) // 2
-    if stroke_width > 0:
-        draw.text((x, y), text, font=font, fill=color,
-                  stroke_width=stroke_width, stroke_fill=color)
-    else:
-        draw.text((x, y), text, font=font, fill=color)
+def draw_centered_text(draw, font, text, center_y, img_width, color, stroke_width=0, target_img=None):
+    """Draw text centered, with emoji fallback to system color emoji font."""
+    if not text or not text.strip():
+        return
+
+    text_clean = _strip_emoji(text)
+    has_emoji = (text_clean != text)
+    emoji_font = _get_emoji_font(font.size) if has_emoji else None
+
+    if not has_emoji or not emoji_font:
+        render_text = text_clean or text
+        if not render_text.strip():
+            return
+        bbox = font.getbbox(render_text)
+        text_w = bbox[2] - bbox[0]
+        x = (img_width - text_w) // 2
+        y = center_y - (bbox[1] + bbox[3]) // 2
+        if stroke_width > 0:
+            draw.text((x, y), render_text, font=font, fill=color,
+                      stroke_width=stroke_width, stroke_fill=color)
+        else:
+            draw.text((x, y), render_text, font=font, fill=color)
+        return
+
+    segments = []
+    cur = ""
+    cur_is_emoji = False
+    for ch in text:
+        ie = _is_emoji(ch)
+        if ie != cur_is_emoji and cur:
+            segments.append((cur, cur_is_emoji))
+            cur = ""
+        cur += ch
+        cur_is_emoji = ie
+    if cur:
+        segments.append((cur, cur_is_emoji))
+
+    total_w = 0
+    seg_metrics = []
+    for seg_text, is_em in segments:
+        f = emoji_font if is_em else font
+        bbox = f.getbbox(seg_text)
+        w = bbox[2] - bbox[0]
+        total_w += w
+        seg_metrics.append((seg_text, is_em, w, bbox))
+
+    main_bbox = font.getbbox(text_clean or "A")
+    text_top = main_bbox[1]
+    text_h = main_bbox[3] - main_bbox[1]
+    draw_y = center_y - (main_bbox[1] + main_bbox[3]) // 2
+
+    em_target_h = int(text_h * 0.92)
+    em_render_size = max(8, em_target_h)
+    ef_sized = _get_emoji_font(em_render_size) if has_emoji else None
+
+    if ef_sized:
+        recalc_w = 0
+        new_metrics = []
+        for seg_text, is_em, w, bbox in seg_metrics:
+            if is_em:
+                eb = ef_sized.getbbox(seg_text)
+                ew = eb[2] - eb[0] if eb else em_render_size
+                new_metrics.append((seg_text, True, ew, eb))
+                recalc_w += ew
+            else:
+                new_metrics.append((seg_text, False, w, bbox))
+                recalc_w += w
+        seg_metrics = new_metrics
+        total_w = recalc_w
+
+    cursor_x = (img_width - total_w) // 2
+
+    for seg_text, is_em, w, bbox in seg_metrics:
+        if is_em and target_img and ef_sized:
+            canvas_sz = em_render_size + 20
+            em_layer = Image.new("RGBA", (canvas_sz, canvas_sz), (0, 0, 0, 0))
+            em_draw = ImageDraw.Draw(em_layer)
+            em_draw.text((0, 0), seg_text, font=ef_sized, fill=(255, 255, 255, 255),
+                         embedded_color=True)
+            em_bbox = em_layer.getbbox()
+            if em_bbox:
+                em_layer = em_layer.crop(em_bbox)
+            em_w, em_h = em_layer.size
+            text_visual_top = draw_y + text_top
+            text_visual_bottom = text_visual_top + text_h
+            text_visual_center = (text_visual_top + text_visual_bottom) // 2
+            paste_y = text_visual_center - em_h // 2
+            paste_x = int(cursor_x)
+            target_img.paste(em_layer, (paste_x, int(paste_y)), em_layer)
+        else:
+            seg_y = draw_y
+            if stroke_width > 0:
+                draw.text((cursor_x, seg_y), seg_text, font=font, fill=color,
+                          stroke_width=stroke_width, stroke_fill=color)
+            else:
+                draw.text((cursor_x, seg_y), seg_text, font=font, fill=color)
+        cursor_x += w
+
+
+def _compute_ssim(img_a, img_b):
+    """Lightweight SSIM between two same-sized grayscale uint8 numpy arrays."""
+    if not _HAS_CV2 or img_a.shape != img_b.shape or img_a.size == 0:
+        return 1.0
+    C1 = (0.01 * 255) ** 2
+    C2 = (0.03 * 255) ** 2
+    a = img_a.astype(np.float64)
+    b = img_b.astype(np.float64)
+    k = (11, 11)
+    mu_a = cv2.GaussianBlur(a, k, 1.5)
+    mu_b = cv2.GaussianBlur(b, k, 1.5)
+    sig_a2 = cv2.GaussianBlur(a * a, k, 1.5) - mu_a * mu_a
+    sig_b2 = cv2.GaussianBlur(b * b, k, 1.5) - mu_b * mu_b
+    sig_ab = cv2.GaussianBlur(a * b, k, 1.5) - mu_a * mu_b
+    num = (2 * mu_a * mu_b + C1) * (2 * sig_ab + C2)
+    den = (mu_a ** 2 + mu_b ** 2 + C1) * (sig_a2 + sig_b2 + C2)
+    ssim_map = num / den
+    return float(ssim_map.mean())
 
 
 def generate_one(background, text_items, img_width, color, font_path):
@@ -510,16 +711,18 @@ def generate_one(background, text_items, img_width, color, font_path):
         sw = item[3] if len(item) > 3 else 0
         if text:
             f = ImageFont.truetype(font_path, fsize)
-            draw_centered_text(draw, f, text, cy, img_width, color, stroke_width=sw)
+            draw_centered_text(draw, f, text, cy, img_width, color,
+                               stroke_width=sw, target_img=img)
     return img
 
 
-def check_image_quality(img, text_items, img_width, qr_box, font_path):
-    """Quality checks: text bounds, spacing vs PSD width, QR readability."""
+def check_image_quality(img, text_items, img_width, qr_box, font_path, original_img=None):
+    """Quality checks: text bounds, spacing, triple QR validation."""
     issues = []
 
     for item in text_items:
         text, center_y, fsize = item[0], item[1], item[2]
+        text = _strip_emoji(text) if text else text
         if not text:
             continue
         f = ImageFont.truetype(font_path, fsize)
@@ -529,31 +732,74 @@ def check_image_quality(img, text_items, img_width, qr_box, font_path):
         x = (img_width - text_w) // 2
         draw_y = center_y - (bbox[1] + bbox[3]) // 2
         if x < 0:
-            issues.append(("error", f"\u6587\u5b57\u300c{text}\u300d\u8d85\u51fa\u56fe\u7247\u5bbd\u5ea6"))
+            issues.append(("error", "文字「{}」超出图片宽度".format(text)))
         elif x < 20:
-            issues.append(("warning", f"\u6587\u5b57\u300c{text}\u300d\u8ddd\u8fb9\u7f18\u592a\u8fd1 ({int(x)}px)"))
+            issues.append(("warning", "文字「{}」距边缘太近 ({}px)".format(text, int(x))))
         if draw_y < 0 or draw_y + text_h > img.size[1]:
-            issues.append(("error", f"\u6587\u5b57\u300c{text}\u300d\u8d85\u51fa\u56fe\u7247\u9ad8\u5ea6"))
+            issues.append(("error", "文字「{}」超出图片高度".format(text)))
 
     if qr_box:
+        pad = 10
+        crop_box = (max(0, qr_box[0] - pad), max(0, qr_box[1] - pad),
+                    min(img.width, qr_box[2] + pad), min(img.height, qr_box[3] + pad))
         try:
-            pad = 10
-            crop_box = (max(0, qr_box[0] - pad), max(0, qr_box[1] - pad),
-                        min(img.width, qr_box[2] + pad), min(img.height, qr_box[3] + pad))
-            qr_crop = img.crop(crop_box).convert("RGB")
-            qr_crop = qr_crop.resize((qr_crop.width * 2, qr_crop.height * 2), Image.LANCZOS)
-            arr = np.array(qr_crop)
+            gen_qr_crop = img.crop(crop_box).convert("RGB")
+            gen_qr_arr = np.array(gen_qr_crop)
+
+            # 4a) SSIM structural comparison with original
+            if original_img and _HAS_CV2:
+                try:
+                    ori_crop_box = (max(0, qr_box[0] - pad), max(0, qr_box[1] - pad),
+                                    min(original_img.width, qr_box[2] + pad),
+                                    min(original_img.height, qr_box[3] + pad))
+                    ori_qr_crop = original_img.crop(ori_crop_box).convert("RGB")
+                    ori_qr_arr = np.array(ori_qr_crop)
+                    if ori_qr_arr.shape == gen_qr_arr.shape:
+                        ori_gray = cv2.cvtColor(ori_qr_arr, cv2.COLOR_RGB2GRAY)
+                        gen_gray = cv2.cvtColor(gen_qr_arr, cv2.COLOR_RGB2GRAY)
+                        ssim_val = _compute_ssim(ori_gray, gen_gray)
+                        if ssim_val > 0.85:
+                            issues.append(("success", "二维码结构校验通过 (SSIM {:.2f})".format(ssim_val)))
+                        elif ssim_val > 0.6:
+                            issues.append(("warning", "二维码结构有差异 (SSIM {:.2f})，可能是圆角/边缘变化".format(ssim_val)))
+                        else:
+                            issues.append(("error", "二维码结构严重偏差 (SSIM {:.2f})，图形可能被破坏".format(ssim_val)))
+
+                        # 4b) Relative sharpness
+                        ori_sharp = cv2.Laplacian(ori_gray, cv2.CV_64F).var()
+                        gen_sharp = cv2.Laplacian(gen_gray, cv2.CV_64F).var()
+                        if ori_sharp > 0:
+                            ratio = gen_sharp / ori_sharp
+                            if ratio > 0.85:
+                                issues.append(("success", "二维码清晰度正常 (比值 {:.2f})".format(ratio)))
+                            elif ratio > 0.5:
+                                issues.append(("warning", "二维码清晰度下降 (比值 {:.2f})".format(ratio)))
+                            else:
+                                issues.append(("error", "二维码清晰度严重下降 (比值 {:.2f})".format(ratio)))
+                    else:
+                        issues.append(("warning", "二维码区域尺寸不匹配，跳过 SSIM 和清晰度对比"))
+                except Exception:
+                    issues.append(("warning", "二维码 SSIM/清晰度检查异常，建议人工扫码确认"))
+            elif not _HAS_CV2:
+                issues.append(("success", "OpenCV 未安装，跳过二维码结构与清晰度检查"))
+
+            # 4c) Enhanced decode with finder pattern detection
+            qr_2x = Image.fromarray(gen_qr_arr).resize(
+                (gen_qr_arr.shape[1] * 2, gen_qr_arr.shape[0] * 2), Image.LANCZOS)
+            qr_2x_arr = np.array(qr_2x)
             if _HAS_CV2:
                 detector = cv2.QRCodeDetector()
-                data, det_bbox, _ = detector.detectAndDecode(arr)
+                data, det_bbox, _ = detector.detectAndDecode(qr_2x_arr)
                 if data:
-                    issues.append(("success", "\u4e8c\u7ef4\u7801\u53ef\u8bc6\u522b"))
+                    issues.append(("success", "二维码可解码：内容确认正常"))
+                elif det_bbox is not None and len(det_bbox) > 0:
+                    issues.append(("info", "检测到二维码定位方块但解码失败，建议手机扫码确认（不影响实际使用）"))
                 else:
-                    issues.append(("success", "\u4e8c\u7ef4\u7801\u5df2\u66ff\u6362\uff0c\u5efa\u8bae\u624b\u673a\u626b\u7801\u786e\u8ba4"))
+                    issues.append(("error", "未检测到二维码定位方块，可能严重乱码或裁切"))
             else:
-                issues.append(("success", "\u4e8c\u7ef4\u7801\u5df2\u66ff\u6362\uff0c\u5efa\u8bae\u624b\u673a\u626b\u7801\u786e\u8ba4"))
+                issues.append(("success", "二维码已替换，建议手机扫码确认"))
         except Exception:
-            pass
+            issues.append(("warning", "二维码检查异常，请人工扫码复核"))
 
     return issues
 
@@ -575,6 +821,7 @@ def compare_preview_quality(original_img, preview_img, text_items, img_width, qr
     # 1) 字体大小、字距、边距、居中、对齐 + 5) 空格
     for item in text_items:
         text, center_y, fsize = item[0], item[1], item[2]
+        text = _strip_emoji(text) if text else text
         if not text:
             issues.append(("warning", "检测到空文本，可能导致内容缺失"))
             continue
@@ -595,8 +842,11 @@ def compare_preview_quality(original_img, preview_img, text_items, img_width, qr
         if abs(left_gap - right_gap) > 6:
             issues.append(("warning", f"文本「{text}」左右边距不平衡（差值 {abs(left_gap-right_gap)}px）"))
         draw_center = y + text_h / 2
-        if abs(draw_center - center_y) > 3:
-            issues.append(("warning", f"文本「{text}」垂直对齐偏差 {abs(draw_center-center_y):.1f}px"))
+        v_offset = abs(draw_center - center_y)
+        if v_offset > 15:
+            issues.append(("warning", f"文本「{text}」垂直对齐偏差 {v_offset:.1f}px"))
+        elif v_offset > 3:
+            issues.append(("info", f"文本「{text}」垂直对齐偏差 {v_offset:.1f}px（不影响实际使用）"))
 
     # 3) 背景清晰和细节是否变化
     try:
@@ -645,21 +895,24 @@ def compare_preview_quality(original_img, preview_img, text_items, img_width, qr
     except Exception:
         issues.append(("warning", "背景清晰度检查失败，请人工放大复核细节"))
 
-    # 4) 二维码清晰度与乱码
-    if qr_box:
+    # 4) 二维码清晰度（相对比较）
+    if qr_box and _HAS_CV2:
         try:
             qx1, qy1, qx2, qy2 = qr_box
-            qr_crop = preview_img.crop((qx1, qy1, qx2, qy2)).convert("RGB")
-            qr_arr = np.array(qr_crop)
-            if _HAS_CV2:
-                qr_gray = cv2.cvtColor(qr_arr, cv2.COLOR_RGB2GRAY)
-                qr_sharp = cv2.Laplacian(qr_gray, cv2.CV_64F).var()
-                if qr_sharp < 45:
-                    issues.append(("warning", "二维码清晰度偏低，可能影响扫码"))
-            else:
-                issues.append(("success", "已跳过二维码清晰度检测，建议人工扫码确认"))
+            ori_qr = original_img.crop((qx1, qy1, qx2, qy2)).convert("RGB")
+            pre_qr = preview_img.crop((qx1, qy1, qx2, qy2)).convert("RGB")
+            ori_g = cv2.cvtColor(np.array(ori_qr), cv2.COLOR_RGB2GRAY)
+            pre_g = cv2.cvtColor(np.array(pre_qr), cv2.COLOR_RGB2GRAY)
+            ori_s = cv2.Laplacian(ori_g, cv2.CV_64F).var()
+            pre_s = cv2.Laplacian(pre_g, cv2.CV_64F).var()
+            if ori_s > 0:
+                r = pre_s / ori_s
+                if r < 0.5:
+                    issues.append(("error", "二维码清晰度严重下降 (比值 {:.2f})".format(r)))
+                elif r < 0.85:
+                    issues.append(("warning", "二维码清晰度下降 (比值 {:.2f})".format(r)))
         except Exception:
-            issues.append(("warning", "二维码细节检查失败，请人工扫码复核"))
+            issues.append(("warning", "二维码清晰度对比检查失败，请人工扫码复核"))
 
     # 6) 图片是否乱码（全图异常波动）
     try:
@@ -704,24 +957,132 @@ def check_list_generation_quality(rows, enable_company, company_field, enable_na
     return issues
 
 
+_FIX_SUGGESTIONS = {
+    "超出图片宽度": "建议：减小字号 2-4px 或缩短文本内容",
+    "距边缘太近": "建议：减小字号 1-2px 或缩短文本",
+    "超出图片高度": "建议：调整垂直位置或减小字号",
+    "字体可能不是指定": "建议：切换到 OPPO Sans 或上传指定字体文件",
+    "首尾空格": "建议：已在生成时自动 trim，检查源数据",
+    "连续空格": "建议：检查名单源数据是否有多余空格",
+    "左右边距不平衡": "建议：属于字体 metrics 特性，通常可忽略",
+    "垂直对齐偏差": "建议：属于字体 metrics 特性，通常可忽略",
+    "背景差异偏大": "建议：检查模板是否为有损压缩格式，改用 PNG 无损模板",
+    "清晰度下降": "建议：使用更高分辨率的模板或二维码源图",
+    "二维码结构严重偏差": "建议：二维码图形被破坏，请重新上传二维码替换图",
+    "二维码结构有差异": "建议：可能是圆角/边缘处理导致，建议手机扫码确认",
+    "二维码清晰度严重下降": "建议：使用更高分辨率的二维码源图",
+    "二维码清晰度下降": "建议：使用更高分辨率的二维码源图",
+    "未检测到二维码定位方块": "建议：二维码严重损坏或被裁切，请重新上传",
+    "解码失败": "建议：二维码可能受损，请手机扫码确认或重新上传",
+    "全图差异偏大": "建议：模板可能已损坏，请重新上传原始模板",
+    "公司名为空": "建议：检查名单中对应行的公司名字段",
+    "人名为空": "建议：检查名单中对应行的人名字段",
+    "异常字符": "建议：名单中包含乱码字符 (U+FFFD)，请修正源文件编码",
+    "文件名为空": "建议：检查名单中公司名/人名字段是否为空",
+    "文件名重复": "建议：名单中存在重名，请添加序号或其他区分信息",
+}
+
+
+def _suggest_fix(msg):
+    for keyword, suggestion in _FIX_SUGGESTIONS.items():
+        if keyword in msg:
+            return suggestion
+    return ""
+
+
 def build_fix_log(all_check_issues, list_issues):
-    lines = [f"纠错日志时间: {_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]
-    lines.append("=== 名单信息检查 ===")
+    lines = [
+        "=" * 60,
+        "  批量邀请函 — 质量检查 & 自动修复日志",
+        "  时间: {}".format(_dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        "=" * 60,
+        "",
+    ]
+
+    total_imgs = len(all_check_issues) if all_check_issues else 0
+    err_count = 0
+    warn_count = 0
+    info_count = 0
+    pass_count = 0
+    auto_fixes = []
+
+    if list_issues:
+        for lvl, _ in list_issues:
+            if lvl == "error":
+                err_count += 1
+            elif lvl == "warning":
+                warn_count += 1
+            elif lvl == "info":
+                info_count += 1
+    if all_check_issues:
+        for _, issues in all_check_issues:
+            img_has_problem = False
+            for lvl, _ in issues:
+                if lvl == "error":
+                    err_count += 1
+                    img_has_problem = True
+                elif lvl == "warning":
+                    warn_count += 1
+                    img_has_problem = True
+                elif lvl == "info":
+                    info_count += 1
+            if not img_has_problem:
+                pass_count += 1
+
+    lines.append("【摘要】")
+    lines.append("  检查图片数: {}".format(total_imgs))
+    lines.append("  通过: {}  |  提示: {}  |  警告: {}  |  错误: {}".format(pass_count, info_count, warn_count, err_count))
+    lines.append("")
+
+    lines.append("=" * 60)
+    lines.append("【名单信息检查】")
+    lines.append("-" * 40)
     if list_issues:
         for lvl, msg in list_issues:
-            lines.append(f"[{lvl.upper()}] {msg}")
+            fix = _suggest_fix(msg)
+            lines.append("  [{}] {}".format(lvl.upper(), msg))
+            if fix:
+                lines.append("        -> {}".format(fix))
+                if lvl == "error":
+                    auto_fixes.append((msg, fix))
     else:
-        lines.append("[SUCCESS] 名单信息检查通过")
-    lines.append("=== 图片质量检查 ===")
+        lines.append("  [PASS] 名单信息检查全部通过")
+    lines.append("")
+
+    lines.append("=" * 60)
+    lines.append("【图片质量检查（14 项标准 + 三重二维码校验）】")
+    lines.append("-" * 40)
     if all_check_issues:
         for fname, issues in all_check_issues:
-            if not issues:
-                lines.append(f"[SUCCESS] {fname}: 未发现问题")
+            non_success = [(l, m) for l, m in issues if l != "success"]
+            if not non_success:
+                lines.append("  [PASS] {}: 全部检查通过".format(fname))
             else:
-                for lvl, msg in issues:
-                    lines.append(f"[{lvl.upper()}] {fname}: {msg}")
+                lines.append("  [FILE] {}".format(fname))
+                for lvl, msg in non_success:
+                    fix = _suggest_fix(msg)
+                    lines.append("    [{}] {}".format(lvl.upper(), msg))
+                    if fix:
+                        lines.append("          -> {}".format(fix))
+                        if lvl == "error":
+                            auto_fixes.append(("{}: {}".format(fname, msg), fix))
     else:
-        lines.append("[INFO] 未执行图片质量检查")
+        lines.append("  [INFO] 未执行图片质量检查")
+    lines.append("")
+
+    lines.append("=" * 60)
+    lines.append("【自动修复建议汇总】")
+    lines.append("-" * 40)
+    if auto_fixes:
+        for i, (problem, fix) in enumerate(auto_fixes, 1):
+            lines.append("  {}. 问题: {}".format(i, problem))
+            lines.append("     修复: {}".format(fix))
+    else:
+        lines.append("  无需自动修复，所有错误级别问题为零。")
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("  日志结束")
+    lines.append("=" * 60)
     return "\n".join(lines) + "\n"
 
 
@@ -799,9 +1160,9 @@ def preview_issue_dialog():
     if st.button("确认重新生成", type="primary", use_container_width=True, key="dlg_issue_regen"):
         if report.strip():
             st.session_state["_do_regen"] = True
-            st.rerun()
-        else: st.warning("请先输入问题描述")
-    issues = st.session_state.get("single_check_issues", [])
+        else:
+            st.warning("请先输入问题描述")
+    issues = st.session_state.get("single_check_issues") or []
     if issues:
         st.caption("分析结果：")
         for level, msg in issues:
@@ -859,43 +1220,109 @@ with upload_col3:
 
 
 has_list = list_file or manual_rows
+
+def _file_fingerprint():
+    parts = []
+    if template_file:
+        parts.append(f"t:{template_file.name}:{template_file.size}")
+    if list_file:
+        parts.append(f"l:{list_file.name}:{list_file.size}")
+    if manual_rows:
+        parts.append(f"m:{len(manual_rows)}")
+    if qr_file:
+        parts.append(f"q:{qr_file.name}:{qr_file.size}")
+    return "|".join(parts)
+
+_cur_fp = _file_fingerprint()
+_prev_fp = st.session_state.get("_file_fingerprint")
+if _cur_fp != _prev_fp:
+    st.session_state["_file_fingerprint"] = _cur_fp
+    for _k in ["all_img_data", "preview_imgs", "check_done",
+               "check_issues", "list_issues", "fix_log_text"]:
+        st.session_state[_k] = None
+
 if template_file and has_list:
     suffix = file_suffix(template_file)
     is_psd = suffix in PSD_EXTENSIONS
 
-    with st.spinner("正在解析模板..."):
-        if is_psd:
-            psd = load_psd(template_file)
-            text_layers = get_text_layers(psd)
-            layer_names = [l.name for l in text_layers]
-            _default_font = get_default_font_path()
-            positions = get_text_layer_positions(psd, _default_font)
-            font_color = get_font_color(psd)
-            font_size = 51
-            qr_box = detect_qr_region(psd)
-            qr_layer = get_qr_layer(psd)
-            qr_layer_img = qr_layer.composite() if qr_layer else None
-            _unused_mask = extract_qr_mask(psd)  # kept for diagnostics; alpha now from qr_layer_img
-            original_img = psd.composite()
-            bg = composite_background(psd)
-            img_width = psd.width
-            img_height = psd.height
-            positions = calibrate_stroke_weights(
-                psd, positions, original_img, bg,
-                _default_font, font_color, img_width)
-        else:
-            loaded = load_image(template_file)
-            if loaded is None:
-                st.stop()
-            original_img = loaded.copy()
-            bg = loaded
-            img_width, img_height = bg.size
-            font_size = 51
-            font_color = (255, 255, 255, 255)
-            qr_box = None
-            qr_layer_img = None
-            layer_names = []
-            positions = {}
+    _tpl_key = _template_cache_key(template_file)
+    _cached_tpl = st.session_state.get("_tpl_cache_key")
+    _need_parse = (_cached_tpl != _tpl_key) or ("_tpl_data" not in st.session_state)
+
+    if _need_parse:
+        with st.spinner("正在解析模板..."):
+            if is_psd:
+                psd = load_psd(template_file)
+                text_layers = get_text_layers(psd)
+                layer_names = [l.name for l in text_layers]
+                _default_font = get_default_font_path()
+                positions = get_text_layer_positions(psd, _default_font)
+                font_color = get_font_color(psd)
+                font_size = 51
+                qr_box = detect_qr_region(psd)
+                qr_layer = get_qr_layer(psd)
+                qr_layer_img = qr_layer.composite() if qr_layer else None
+                _unused_mask = extract_qr_mask(psd)
+                original_img = psd.composite()
+                bg = composite_background(psd)
+                img_width = psd.width
+                img_height = psd.height
+                positions = calibrate_stroke_weights(
+                    psd, positions, original_img, bg,
+                    _default_font, font_color, img_width)
+                st.session_state["_tpl_data"] = {
+                    "psd": psd, "text_layers": text_layers,
+                    "layer_names": layer_names, "positions": positions,
+                    "font_color": font_color, "font_size": font_size,
+                    "qr_box": qr_box, "qr_layer_img": qr_layer_img,
+                    "original_img": original_img, "bg": bg,
+                    "img_width": img_width, "img_height": img_height,
+                    "is_psd": True,
+                }
+            else:
+                loaded = load_image(template_file)
+                if loaded is None:
+                    st.stop()
+                original_img = loaded.copy()
+                bg = loaded
+                st.session_state["_tpl_data"] = {
+                    "original_img": original_img, "bg": bg,
+                    "img_width": bg.size[0], "img_height": bg.size[1],
+                    "is_psd": False, "psd": None, "text_layers": [],
+                    "layer_names": [], "positions": {},
+                    "font_color": (255, 255, 255, 255), "font_size": 51,
+                    "qr_box": None, "qr_layer_img": None,
+                }
+            st.session_state["_tpl_cache_key"] = _tpl_key
+    else:
+        _td = st.session_state["_tpl_data"]
+        is_psd = _td["is_psd"]
+
+    _td = st.session_state["_tpl_data"]
+    if is_psd:
+        psd = _td["psd"]
+        text_layers = _td["text_layers"]
+        layer_names = _td["layer_names"]
+        positions = _td["positions"]
+        font_color = _td["font_color"]
+        font_size = _td["font_size"]
+        qr_box = _td["qr_box"]
+        qr_layer_img = _td["qr_layer_img"]
+        original_img = _td["original_img"]
+        bg = _td["bg"].copy()
+        img_width = _td["img_width"]
+        img_height = _td["img_height"]
+    else:
+        original_img = _td["original_img"]
+        bg = _td["bg"].copy()
+        img_width = _td["img_width"]
+        img_height = _td["img_height"]
+        font_size = _td["font_size"]
+        font_color = _td["font_color"]
+        qr_box = _td["qr_box"]
+        qr_layer_img = _td["qr_layer_img"]
+        layer_names = _td["layer_names"]
+        positions = _td["positions"]
 
     if list_file:
         rows, fields = parse_spreadsheet(list_file)
@@ -1084,11 +1511,24 @@ if template_file and has_list:
     custom_font_file = None
 
     if font_source == "\u9ed8\u8ba4 OPPO \u5b57\u4f53":
-        font_path = get_default_font_path()
-        if font_path:
-            st.success("\u5df2\u4f7f\u7528\u9ed8\u8ba4\u5b57\u4f53 OPPO Sans 4.0")
+        _oppo_medium = FONTS_DIR / "OPPOSans-Medium.ttf"
+        _oppo4 = FONTS_DIR / "OPPOSans4.ttf"
+        _oppo_options = {}
+        if _oppo_medium.exists():
+            _oppo_options["OPPO Sans (Medium)"] = str(_oppo_medium)
+        if _oppo4.exists():
+            _oppo_options["OPPO Sans 4.0 (Regular)"] = str(_oppo4)
+        if _oppo_options:
+            _oppo_choice = st.radio(
+                "选择 OPPO 字体版本",
+                list(_oppo_options.keys()),
+                horizontal=True,
+                key="oppo_font_choice",
+            )
+            font_path = _oppo_options[_oppo_choice]
+            st.success(f"已使用默认字体 {_oppo_choice}")
         else:
-            st.error("\u9ed8\u8ba4\u5b57\u4f53\u672a\u627e\u5230\uff0c\u8bf7\u5207\u6362\u5230\u201c\u4e0a\u4f20\u81ea\u5b9a\u4e49\u5b57\u4f53\u201d")
+            st.error("默认字体未找到，请切换到「上传自定义字体」")
             st.stop()
     elif font_source == "\u7535\u8111\u672c\u5730\u5b57\u4f53":
         all_fonts = scan_fonts()
@@ -1122,6 +1562,7 @@ if template_file and has_list:
             font_tmp.write(custom_font_file.getvalue())
             font_tmp.flush()
             font_path = font_tmp.name
+            st.session_state["_custom_font_active"] = True
             try:
                 family, style = ImageFont.truetype(font_path, 20).getname()
                 st.success(f"\u5df2\u52a0\u8f7d\u81ea\u5b9a\u4e49\u5b57\u4f53\uff1a{family} ({style})")
@@ -1129,6 +1570,7 @@ if template_file and has_list:
                 st.error(f"\u5b57\u4f53\u6587\u4ef6\u65e0\u6cd5\u52a0\u8f7d: {e}")
                 font_path = get_default_font_path()
         else:
+            st.session_state["_custom_font_active"] = False
             st.info("\u8bf7\u4e0a\u4f20\u5b57\u4f53\u6587\u4ef6\uff0c\u6216\u5207\u6362\u5230\u5176\u4ed6\u5b57\u4f53\u6765\u6e90")
             font_path = get_default_font_path()
 
@@ -1186,26 +1628,38 @@ if template_file and has_list:
             parts.append(row[name_field])
         return "_".join(parts) if parts else f"row"
 
-    # ── preview: original vs first ──
+    # ── preview: original vs first (always freshly generated) ──
     st.markdown('<div class="apple-section-title">第三步：预览与生成</div>', unsafe_allow_html=True)
     first = rows[0]
     preview = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
-    preview_show = st.session_state.get("regen_preview", preview)
 
     pcol1, pcol2 = st.columns(2)
     with pcol1:
-        st.image(original_img, caption="\u539f\u59cb\u6a21\u677f", use_container_width=True)
+        st.image(original_img, caption="原始模板", use_container_width=True)
     with pcol2:
-        st.image(preview_show, caption=f"\u66ff\u6362\u6548\u679c: {build_filename(first)}",
+        st.image(preview, caption=f"替换效果: {build_filename(first)}",
                  use_container_width=True)
 
-    st.markdown("---")
-    st.caption("\u8bf7\u4ed4\u7ec6\u5bf9\u6bd4\u4e0a\u65b9\u4e24\u5f20\u56fe\uff0c\u786e\u8ba4\u5b57\u4f53\u5927\u5c0f\u3001\u4f4d\u7f6e\u3001\u95f4\u8ddd\u3001\u4e8c\u7ef4\u7801\u662f\u5426\u4e0e\u539f\u56fe\u4e00\u81f4\u3002")
+    prev_act1, prev_act2 = st.columns(2)
+    with prev_act1:
+        if st.button("🔄 刷新预览", use_container_width=True, key="btn_refresh_preview"):
+            st.session_state["_preview_refresh"] = True
+    with prev_act2:
+        _zoom = st.toggle("🔍 放大查看", key="toggle_zoom_preview")
+
+    if _zoom:
+        zoom_tab1, zoom_tab2 = st.tabs(["原始模板（放大）", "替换效果（放大）"])
+        with zoom_tab1:
+            st.image(original_img, use_container_width=False)
+        with zoom_tab2:
+            st.image(preview, use_container_width=False)
+
+    st.caption("预览会在字体、粗细、颜色等参数变化时自动刷新。请仔细对比两张图，确认字体大小、位置、间距、二维码是否与原图一致。")
 
 
 
 
-    # ── generate all (always visible) ──
+    # ── generate all / check / download ──
     st.markdown("---")
     st.markdown("### 生成全部")
     total = len(rows)
@@ -1226,6 +1680,7 @@ if template_file and has_list:
                 progress2.progress((i + 1) / total, text=f"正在生成 [{i+1}/{total}] {fname}")
             progress2.progress(1.0, text=f"全部生成完成! 共 {total} 张")
             st.session_state["all_img_data"] = all_img_data
+            st.session_state["check_done"] = None
 
     with gen_all_col2:
         preview_count = st.radio(
@@ -1237,31 +1692,37 @@ if template_file and has_list:
         )
 
     if preview_count and preview_count > 0:
-        preview_count = min(preview_count, total)
-        if st.button("生成预览", use_container_width=True, key="btn_gen_preview"):
-            preview_imgs = []
-            progress = st.progress(0, text="正在生成预览...")
-            for i in range(preview_count):
-                row = rows[i]
-                img = generate_one(bg, build_text_items(row), img_width, font_color, font_path)
-                fname = build_filename(row)
-                preview_imgs.append((img.copy(), fname))
-                progress.progress((i + 1) / preview_count, text=f"预览 [{i+1}/{preview_count}]")
-            progress.progress(1.0, text=f"预览完成! 共 {preview_count} 张")
-            st.session_state["preview_imgs"] = preview_imgs
+        _pcount = min(preview_count, total)
+        prev_btn_col, prev_close_col = st.columns(2)
+        with prev_btn_col:
+            if st.button("生成预览", use_container_width=True, key="btn_gen_preview"):
+                preview_imgs = []
+                progress = st.progress(0, text="正在生成预览...")
+                for i in range(_pcount):
+                    row = rows[i]
+                    img = generate_one(bg, build_text_items(row), img_width, font_color, font_path)
+                    fname = build_filename(row)
+                    preview_imgs.append((img.copy(), fname))
+                    progress.progress((i + 1) / _pcount, text=f"预览 [{i+1}/{_pcount}]")
+                progress.progress(1.0, text=f"预览完成! 共 {_pcount} 张")
+                st.session_state["preview_imgs"] = preview_imgs
+        with prev_close_col:
+            if st.session_state.get("preview_imgs"):
+                if st.button("关闭预览", use_container_width=True, key="btn_close_preview"):
+                    st.session_state["preview_imgs"] = None
 
-        if "preview_imgs" in st.session_state and st.session_state["preview_imgs"]:
-            preview_imgs = st.session_state["preview_imgs"]
-            for i in range(0, len(preview_imgs), 3):
-                chunk = preview_imgs[i:i+3]
+        stored_preview = st.session_state.get("preview_imgs")
+        if stored_preview:
+            for i in range(0, len(stored_preview), 3):
+                chunk = stored_preview[i:i+3]
                 cols = st.columns(len(chunk))
-                for col, (img, caption) in zip(cols, chunk):
+                for col, (pimg, caption) in zip(cols, chunk):
                     with col:
-                        st.image(img, caption=caption, use_container_width=True)
+                        st.image(pimg, caption=caption, use_container_width=True)
 
-    # ── download (always visible after generation) ──
-    if "all_img_data" in st.session_state and st.session_state["all_img_data"]:
-        all_img_data = st.session_state["all_img_data"]
+    # ── download + check + redownload ──
+    all_img_data = st.session_state.get("all_img_data")
+    if all_img_data:
         st.markdown("---")
         total_gen = len(all_img_data)
         zip_buf = io.BytesIO()
@@ -1276,7 +1737,138 @@ if template_file and has_list:
             mime="application/zip",
             type="primary",
             use_container_width=True,
+            key="btn_download_zip",
         )
+
+        check_col, regen_col = st.columns(2)
+        with check_col:
+            do_check = st.button("一件检查全部", use_container_width=True, key="btn_check_all")
+        with regen_col:
+            do_regen = st.button("重新下载全部", use_container_width=True, key="btn_regen_all")
+
+        # ── execute quality check (all images, full 14-point suite) ──
+        if do_check:
+            check_count = len(all_img_data)
+            all_check_issues = []
+            list_issues = check_list_generation_quality(
+                rows, enable_company, company_field,
+                enable_name, name_field, build_filename,
+            )
+            _use_custom = bool(st.session_state.get("_custom_font_active"))
+            check_progress = st.progress(0, text="正在检查全部图片...")
+            for i in range(check_count):
+                fname = all_img_data[i][0]
+                chk_img = Image.open(io.BytesIO(all_img_data[i][1])).convert("RGBA")
+                row = rows[i] if i < len(rows) else rows[-1]
+                text_items = build_text_items(row)
+                issues = check_image_quality(
+                    chk_img, text_items, img_width, qr_box, font_path,
+                    original_img=original_img,
+                )
+                issues += compare_preview_quality(
+                    original_img, chk_img, text_items, img_width,
+                    qr_box, font_path, use_custom_font=_use_custom,
+                )
+                all_check_issues.append((fname, issues))
+                check_progress.progress((i + 1) / check_count, text=f"检查 [{i+1}/{check_count}] {fname}")
+            check_progress.progress(1.0, text=f"全部 {check_count} 张检查完成!")
+
+            st.session_state["check_issues"] = all_check_issues
+            st.session_state["list_issues"] = list_issues
+
+            has_errors = False
+            has_warnings = False
+            info_count = 0
+
+            if list_issues:
+                st.markdown("#### 名单信息检查")
+                for level, msg in list_issues:
+                    if level == "error":
+                        st.error(msg)
+                        has_errors = True
+                    elif level == "warning":
+                        st.warning(msg)
+                        has_warnings = True
+                    elif level == "info":
+                        info_count += 1
+                    else:
+                        st.success(msg)
+
+            for fname, issues in all_check_issues:
+                for level, msg in issues:
+                    if level == "error":
+                        st.error(f"**{fname}**: {msg}")
+                        has_errors = True
+                    elif level == "warning":
+                        st.warning(f"**{fname}**: {msg}")
+                        has_warnings = True
+                    elif level == "info":
+                        info_count += 1
+
+            if info_count > 0:
+                st.info(f"有 {info_count} 项提示信息（不影响实际使用质量），详见纠错日志。")
+
+            fix_log = build_fix_log(all_check_issues, list_issues)
+            st.download_button(
+                "下载纠错日志",
+                data=fix_log,
+                file_name=f"纠错日志_{_dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain",
+                use_container_width=True,
+                key="btn_download_fix_log",
+            )
+
+            if not has_errors and not has_warnings:
+                st.markdown(
+                    '<div class="check-pass-banner">✅ 全部检查通过！字体居中 / 间距正常 / 二维码可识别</div>',
+                    unsafe_allow_html=True,
+                )
+                st.session_state["check_done"] = True
+            elif not has_errors:
+                st.info("检查完成，有轻微警告但不影响使用，可以下载。")
+                st.session_state["check_done"] = True
+            else:
+                st.error("发现错误，建议点击「重新下载全部」调整后重新生成。")
+                st.session_state["check_done"] = False
+
+        elif st.session_state.get("check_done") is True:
+            st.markdown(
+                '<div class="check-pass-banner">✅ 上次检查已通过，可放心下载</div>',
+                unsafe_allow_html=True,
+            )
+        elif st.session_state.get("check_done") is False:
+            st.warning("上次检查发现错误，建议调整后点击「重新下载全部」重新生成。")
+
+        # ── regenerate all ──
+        if do_regen:
+            regen_progress = st.progress(0, text="正在重新生成...")
+            regen_data = []
+            for i, row in enumerate(rows):
+                fname = build_filename(row)
+                regen_img = generate_one(bg, build_text_items(row), img_width, font_color, font_path)
+                img_buf = io.BytesIO()
+                regen_img.save(img_buf, format="PNG")
+                regen_data.append((f"{fname}.png", img_buf.getvalue()))
+                regen_progress.progress((i + 1) / total, text=f"重新生成 [{i+1}/{total}] {fname}")
+            regen_progress.progress(1.0, text=f"重新生成完成! 共 {total} 张")
+            st.session_state["all_img_data"] = regen_data
+            st.session_state["check_done"] = None
+            st.session_state["check_issues"] = None
+            st.session_state["list_issues"] = None
+
+            regen_zip = io.BytesIO()
+            with zipfile.ZipFile(regen_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                for filename, data in regen_data:
+                    zf.writestr(filename, data)
+            st.download_button(
+                label=f"重新生成完成，下载全部 ({len(regen_data)} 张 ZIP)",
+                data=regen_zip.getvalue(),
+                file_name="邀请函批量生成.zip",
+                mime="application/zip",
+                type="primary",
+                use_container_width=True,
+                key="btn_regen_download",
+            )
 
 else:
     st.info("\u8bf7\u5148\u4e0a\u4f20\u6a21\u677f\u6587\u4ef6\u548c\u540d\u5355\u6587\u4ef6")
@@ -1289,3 +1881,14 @@ with st.expander("\u57fa\u7840\u95ee\u9898\u89e3\u8bf4", expanded=False):
         "- \u4ecd\u65e0\u6cd5\u8bbf\u95ee\u65f6\uff0c\u8bf7\u6e05\u9664 `streamlit.app` \u7ad9\u70b9\u6570\u636e\u540e\u518d\u8bd5\u3002\n"
         "- \u672c\u5de5\u5177\u4e3a Streamlit Cloud \u516c\u7f51\u90e8\u7f72\uff0c\u4e0d\u540c\u7f51\u7edc/\u5728\u5bb6\u5747\u53ef\u4f7f\u7528\uff1b\u82e5\u4ec5\u67d0\u4e9b\u7f51\u7edc\u5931\u8d25\uff0c\u8bf7\u8054\u7cfb IT \u653e\u884c `*.streamlit.app` HTTPS \u8bbf\u95ee\u3002"
     )
+
+st.caption(_BUILD_TAG)
+if _heal_log:
+    with st.expander(f"自愈日志 ({len(_heal_log)})", expanded=False):
+        st.code("\n".join(_heal_log[-30:]), language="text")
+        st.download_button(
+            "下载自愈日志",
+            "\n".join(_heal_log),
+            file_name="self_heal_log.txt",
+            mime="text/plain",
+        )
