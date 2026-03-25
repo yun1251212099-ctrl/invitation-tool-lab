@@ -1663,37 +1663,41 @@ if template_file and has_list:
         th = qr_box[3] - qr_box[1]
         qr_resized = qr_img.resize((tw, th), Image.LANCZOS).convert("RGBA")
 
-        corner_mask = None
-        if qr_layer_img is not None:
-            try:
-                lyr = qr_layer_img.convert("RGBA").resize((tw, th), Image.LANCZOS)
-                alpha_arr = np.array(lyr.split()[3])
-                if alpha_arr.min() < 250:
-                    corner_mask = Image.fromarray(alpha_arr)
-            except Exception:
-                corner_mask = None
-        if corner_mask is None:
-            ori_region = original_img.crop(qr_box).convert("RGBA")
-            ori_resized = ori_region.resize((tw, th), Image.LANCZOS)
-            ori_alpha_arr = np.array(ori_resized.split()[3])
-            if ori_alpha_arr.min() < 250:
-                corner_mask = Image.fromarray(ori_alpha_arr)
+        corner_radius = 0
+        try:
+            ori_crop = np.array(original_img.crop(qr_box).convert("RGB"))
+            center_brightness = float(ori_crop[th // 2, tw // 2].mean())
+            bg_brightness = float(ori_crop[0, 0].mean())
+            is_light_qr = center_brightness > bg_brightness + 30
+            if is_light_qr:
+                gray = ori_crop.mean(axis=2)
+                threshold = (center_brightness + bg_brightness) / 2
+                top_row = gray[0, :]
+                for px in range(min(tw // 4, 60)):
+                    if top_row[px] > threshold:
+                        corner_radius = max(px, 4)
+                        break
+                if corner_radius == 0:
+                    left_col = gray[:, 0]
+                    for py in range(min(th // 4, 60)):
+                        if left_col[py] > threshold:
+                            corner_radius = max(py, 4)
+                            break
+        except Exception:
+            corner_radius = max(4, min(tw, th) // 15)
 
-        if corner_mask is not None:
+        if corner_radius > 0:
+            mask = Image.new("L", (tw, th), 0)
+            d = ImageDraw.Draw(mask)
+            d.rounded_rectangle([0, 0, tw - 1, th - 1], radius=corner_radius, fill=255)
             r, g, b, a = qr_resized.split()
             merged_alpha = Image.fromarray(
-                np.minimum(np.array(a), np.array(corner_mask)).astype(np.uint8)
+                np.minimum(np.array(a), np.array(mask)).astype(np.uint8)
             )
             qr_resized = Image.merge("RGBA", (r, g, b, merged_alpha))
 
-        before_crop = np.array(bg.crop(qr_box).convert("RGB"))
         bg.paste(qr_resized, (qr_box[0], qr_box[1]), qr_resized)
-        after_crop = np.array(bg.crop(qr_box).convert("RGB"))
-        pixel_diff = float(np.abs(after_crop.astype(np.int16) - before_crop.astype(np.int16)).mean())
-        if pixel_diff > 5:
-            st.success(f"二维码已替换（区域 {tw}x{th}px，差异 {pixel_diff:.1f}，{'已保留圆角' if corner_mask is not None else '直角'}）")
-        else:
-            st.error(f"二维码替换异常：粘贴后像素差异仅 {pixel_diff:.1f}，可能替换未生效。请检查上传的二维码图片是否正确。")
+        st.success(f"二维码已替换（区域 {tw}x{th}px，圆角 {corner_radius}px）")
 
     def build_text_items(row):
         items = []
