@@ -21,6 +21,21 @@ git reset --hard <目标SHA>     # 回到正确版本
 git push --force origin main   # 恢复线上
 ```
 
+## 合并前防回归 grep 清单
+
+每次 PR 或推送前执行以下检查，确保已知阻塞逻辑不被重新引入：
+
+```bash
+# 不应存在的模式（若 grep 有输出则拒绝合并）
+grep -n 'preview_confirmed'           app.py   # 曾阻塞生成/下载流程
+grep -n 'preview_gallery_confirmed'   app.py   # 同上
+grep -n '_password_ok'                app.py   # 已移除的访问密码
+grep -n 'pointer-events:\s*none'      app.py   # 可能导致上传不可点击
+grep -n 'display:\s*none.*stFileUploader' app.py  # 隐藏上传组件
+```
+
+若任何一条有输出，说明旧问题被重新引入，需在合并前修复。
+
 ## 长期建议
 
 - 为"正式版"和"测试版"各自创建独立的 Streamlit Cloud App（指向不同分支）。

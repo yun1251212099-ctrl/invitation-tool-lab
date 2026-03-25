@@ -29,6 +29,29 @@ import datetime as _dt
 APP_DIR = Path(__file__).parent
 FONTS_DIR = APP_DIR / "fonts"
 
+# ── self-heal: detect & reset known-bad session state, log actions ──
+
+_KNOWN_BAD_FLAGS = [
+    "preview_confirmed",
+    "preview_gallery_confirmed",
+    "_password_ok",
+]
+
+def _init_self_heal():
+    if "_self_heal_log" not in st.session_state:
+        st.session_state["_self_heal_log"] = []
+    for flag in _KNOWN_BAD_FLAGS:
+        if st.session_state.get(flag):
+            st.session_state[flag] = False
+            _log_self_heal(f"reset '{flag}' -> False (known blocker)")
+
+def _log_self_heal(action: str):
+    ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = f"[{ts}] {action}"
+    log = st.session_state.get("_self_heal_log", [])
+    log.append(entry)
+    st.session_state["_self_heal_log"] = log[-200:]
+
 def _build_tag():
     try:
         sha = _sp.check_output(
@@ -41,6 +64,7 @@ def _build_tag():
 _BUILD_TAG = _build_tag()
 
 st.set_page_config(page_title="批量邀请函工作流-M2.0", page_icon="📨", layout="wide")
+_init_self_heal()
 st.markdown(
     f"""
     <div class="apple-hero">
@@ -122,6 +146,9 @@ st.markdown(
         border-radius: 12px;
         padding: 0.6rem 0.8rem;
         background: rgba(250,250,252,0.6);
+        pointer-events: auto !important;
+        position: relative;
+        z-index: 1;
     }
     [data-testid="stFileUploaderDropzoneInstructions"] > div > span,
     [data-testid="stFileUploaderDropzoneInstructions"] > div > small {
@@ -132,6 +159,11 @@ st.markdown(
         border-radius: 980px;
         min-height: 2.4rem;
         padding: 0 1.2rem;
+        font-size: 0 !important;
+        pointer-events: auto !important;
+    }
+    [data-testid="stFileUploaderDropzone"] button::before {
+        content: "点击上传文件";
         font-size: 0.88rem;
     }
     /* Apple buttons */
@@ -143,6 +175,19 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+with st.sidebar:
+    st.caption(_BUILD_TAG)
+    heal_log = st.session_state.get("_self_heal_log", [])
+    if heal_log:
+        with st.expander(f"自愈日志 ({len(heal_log)})", expanded=False):
+            st.code("\n".join(heal_log[-30:]), language="text")
+            st.download_button(
+                "下载自愈日志",
+                "\n".join(heal_log),
+                file_name="self_heal_log.txt",
+                mime="text/plain",
+            )
 
 PSD_EXTENSIONS = (".psd", ".psb")
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp")
@@ -792,21 +837,18 @@ with upload_col1:
     )
 
 with upload_col2:
-    list_btn_col1, list_btn_col2 = st.columns([1, 1])
-    with list_btn_col1:
-        list_file = st.file_uploader("2. 上传名单文件", type=LIST_EXTENSIONS)
-    with list_btn_col2:
-        if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
-            manual_input_dialog()
+    list_file = st.file_uploader("2. 上传名单文件", type=LIST_EXTENSIONS)
+    if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
+        manual_input_dialog()
+    manual_rows = st.session_state.get("manual_list_rows", [])
+    if manual_rows:
+        st.caption(f"已手动输入 {len(manual_rows)} 条名单")
     st.markdown(
         '<div class="apple-info-card"><strong>名单规则（二选一）</strong>'
         '<span>支持 CSV、XLSX、XLS。</span>'
         '</div>',
         unsafe_allow_html=True,
     )
-    manual_rows = st.session_state.get("manual_list_rows", [])
-    if manual_rows:
-        st.caption(f"已手动输入 {len(manual_rows)} 条名单")
 
 with upload_col3:
     qr_file = st.file_uploader(
