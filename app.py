@@ -341,7 +341,11 @@ def get_text_layers(psd):
 
 
 def get_qr_layer(psd):
-    _QR_KEYWORDS = ["\u4e8c\u7ef4\u7801", "qr", "qrcode", "\u626b\u7801", "\u626b\u4e00\u626b"]
+    _QR_KEYWORDS = [
+        "二维码", "qr", "qrcode", "扫码", "扫一扫",
+        "code", "barcode", "链接", "link", "url",
+        "直播码", "小程序码", "微信码",
+    ]
     for l in psd.descendants():
         name_lower = l.name.lower()
         if any(kw in name_lower for kw in _QR_KEYWORDS):
@@ -351,6 +355,31 @@ def get_qr_layer(psd):
         name_lower = l.name.lower()
         if any(kw in name_lower for kw in _QR_KEYWORDS):
             return l
+    if _HAS_CV2:
+        try:
+            full = psd.composite().convert("RGB")
+            arr = np.array(full)
+            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+            detector = cv2.QRCodeDetector()
+            _, pts, _ = detector.detectAndDecode(gray)
+            if pts is not None and len(pts) > 0:
+                xs = pts[0][:, 0]
+                ys = pts[0][:, 1]
+                pad = 20
+                x1 = max(0, int(xs.min()) - pad)
+                y1 = max(0, int(ys.min()) - pad)
+                x2 = min(full.width, int(xs.max()) + pad)
+                y2 = min(full.height, int(ys.max()) + pad)
+                class _FakeLayer:
+                    def __init__(self, box):
+                        self.left, self.top, self.right, self.bottom = box
+                        self.name = "auto_detected_qr"
+                        self.kind = "pixel"
+                    def composite(self):
+                        return full.crop((self.left, self.top, self.right, self.bottom)).convert("RGBA")
+                return _FakeLayer((x1, y1, x2, y2))
+        except Exception:
+            pass
     return None
 
 
@@ -1324,12 +1353,21 @@ if template_file and has_list:
     else:
         info_parts.append(f"模板尺寸 {img_width}x{img_height}")
     info_parts.append(f"名单共 {len(rows)} 条记录")
+    if qr_box:
+        info_parts.append("已识别二维码区域")
     st.success(f"解析完成：{'，'.join(info_parts)}")
-    m1, m2 = st.columns(2)
+    m1, m2, m3 = st.columns(3)
     with m1:
         st.metric("名单记录数", len(rows))
     with m2:
         st.metric("模板宽度", img_width)
+    with m3:
+        if qr_box:
+            st.metric("二维码状态", "已检测")
+        else:
+            st.metric("二维码状态", "未检测到")
+            if qr_file:
+                st.warning("已上传替换二维码但模板中未检测到二维码区域。请确认 PSD 图层名称包含「二维码」「QR」「扫码」等关键词。")
 
     # ── auto-detect fields ──
     COMPANY_KEYWORDS = ["company", "\u516c\u53f8", "\u5355\u4f4d", "\u673a\u6784", "\u4f01\u4e1a", "\u7ec4\u7ec7"]
@@ -1499,10 +1537,10 @@ if template_file and has_list:
         _oppo_medium = FONTS_DIR / "OPPOSans-Medium.ttf"
         _oppo4 = FONTS_DIR / "OPPOSans4.ttf"
         _oppo_options = {}
-        if _oppo_medium.exists():
-            _oppo_options["OPPO Sans (Medium)"] = str(_oppo_medium)
         if _oppo4.exists():
             _oppo_options["OPPO Sans 4.0 (Regular)"] = str(_oppo4)
+        if _oppo_medium.exists():
+            _oppo_options["OPPO Sans (Medium)"] = str(_oppo_medium)
         if _oppo_options:
             _oppo_choice = st.radio(
                 "选择 OPPO 字体版本",
@@ -1593,6 +1631,25 @@ if template_file and has_list:
             font_color = (r, g, b, 255)
 
     # ── QR replacement ──
+    if qr_file and not qr_box:
+        if _HAS_CV2:
+            try:
+                _detect_arr = np.array(original_img.convert("RGB"))
+                _detect_gray = cv2.cvtColor(_detect_arr, cv2.COLOR_RGB2GRAY)
+                _det = cv2.QRCodeDetector()
+                _, _pts, _ = _det.detectAndDecode(_detect_gray)
+                if _pts is not None and len(_pts) > 0:
+                    _xs, _ys = _pts[0][:, 0], _pts[0][:, 1]
+                    _pad = 20
+                    qr_box = (
+                        max(0, int(_xs.min()) - _pad),
+                        max(0, int(_ys.min()) - _pad),
+                        min(img_width, int(_xs.max()) + _pad),
+                        min(img_height, int(_ys.max()) + _pad),
+                    )
+                    st.info(f"通过图像分析自动检测到二维码区域 ({qr_box[0]},{qr_box[1]})-({qr_box[2]},{qr_box[3]})")
+            except Exception:
+                pass
     if qr_file and qr_box:
         qr_img = Image.open(qr_file).convert("RGBA")
         bg = replace_qr(bg, qr_img, qr_box, original_layer_img=qr_layer_img)
