@@ -157,20 +157,6 @@ st.markdown(
         min-height: 2.4rem;
         padding: 0 1.2rem;
         font-size: 0.88rem;
-        color: transparent !important;
-        position: relative;
-        overflow: hidden;
-    }
-    [data-testid="stFileUploaderDropzone"] button::after {
-        content: "点击上传文件";
-        color: #1d1d1f;
-        position: absolute;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 0.88rem;
-        pointer-events: none;
     }
     /* Apple buttons */
     [data-testid="stButton"] > button, [data-testid="stDownloadButton"] > button {
@@ -827,10 +813,11 @@ def preview_issue_dialog():
 
 st.markdown('<div class="apple-section-title">第一步：上传文件</div>', unsafe_allow_html=True)
 
-upload_col1, upload_col2, upload_col3 = st.columns(3)
+upload_col1, upload_col2, upload_col3 = st.columns([1, 1.3, 1])
+
 with upload_col1:
     template_file = st.file_uploader(
-        "1. 上传模板文件",
+        "上传模板文件",
         type=ALL_TEMPLATE_TYPES,
         help="PSD / PSB / PNG / JPG / TIFF / BMP / WebP / PDF / EPS / AI",
     )
@@ -843,23 +830,22 @@ with upload_col1:
     )
 
 with upload_col2:
-    with st.container(border=True):
-        list_file = st.file_uploader("2. 上传名单文件", type=LIST_EXTENSIONS)
-        if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
-            manual_input_dialog()
-        manual_rows = st.session_state.get("manual_list_rows", [])
-        if manual_rows:
-            st.caption(f"已手动输入 {len(manual_rows)} 条名单")
+    list_file = st.file_uploader("上传名单文件", type=LIST_EXTENSIONS)
+    if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
+        manual_input_dialog()
+    manual_rows = st.session_state.get("manual_list_rows", [])
+    if manual_rows:
+        st.caption(f"已手动输入 {len(manual_rows)} 条名单")
     st.markdown(
         '<div class="apple-info-card"><strong>名单规则（二选一）</strong>'
-        '<span>支持 CSV、XLSX、XLS。</span>'
+        '<span>支持 CSV、XLSX、XLS。少量名单可点「手动输入名单」。</span>'
         '</div>',
         unsafe_allow_html=True,
     )
 
 with upload_col3:
     qr_file = st.file_uploader(
-        "3. 上传替换二维码（可选）",
+        "上传替换二维码（可选）",
         type=["png", "jpg", "jpeg", "webp"],
     )
     st.markdown(
@@ -870,7 +856,7 @@ with upload_col3:
         unsafe_allow_html=True,
     )
 
-st.caption("上传方式：可拖拽文件到上传框，或点击“选择文件”按钮上传。")
+
 
 has_list = list_file or manual_rows
 if template_file and has_list:
