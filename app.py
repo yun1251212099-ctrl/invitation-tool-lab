@@ -1542,12 +1542,15 @@ if template_file and has_list:
         if _oppo_medium.exists():
             _oppo_options["OPPO Sans (Medium)"] = str(_oppo_medium)
         if _oppo_options:
-            _oppo_choice = st.radio(
-                "选择 OPPO 字体版本",
-                list(_oppo_options.keys()),
-                horizontal=True,
-                key="oppo_font_choice",
-            )
+            if len(_oppo_options) > 1:
+                _oppo_choice = st.radio(
+                    "选择 OPPO 字体版本",
+                    list(_oppo_options.keys()),
+                    horizontal=True,
+                    key="oppo_font_choice",
+                )
+            else:
+                _oppo_choice = list(_oppo_options.keys())[0]
             font_path = _oppo_options[_oppo_choice]
             st.success(f"已使用默认字体 {_oppo_choice}")
         else:
@@ -1611,15 +1614,15 @@ if template_file and has_list:
             name_fsize = positions[name_layer][1]
             name_stroke = positions[name_layer][3]
 
-    # ── font weight slider ──
+    # ── font weight ──
     auto_stroke = max(company_stroke, name_stroke)
-    stroke_override = st.slider(
-        "\u5b57\u4f53\u7c97\u7ec6\u5fae\u8c03",
-        min_value=0, max_value=4, value=auto_stroke,
-        help="\u50cf\u7d20\u6821\u51c6\u9ed8\u8ba4\u503c\u4e3a {}\uff0c\u5411\u53f3\u62d6\u52a8\u52a0\u7c97\uff0c\u5411\u5de6\u53d8\u7ec6\u3002\u8c03\u6574\u540e\u9884\u89c8\u81ea\u52a8\u66f4\u65b0\u3002".format(auto_stroke),
+    stroke_override = st.number_input(
+        "字体粗细微调",
+        min_value=0.0, max_value=10.0, value=float(auto_stroke), step=0.001, format="%.3f",
+        help="像素校准默认值为 {}，数值越大越粗。Pillow 渲染时取整数部分，小数部分通过透明度模拟。".format(auto_stroke),
     )
-    company_stroke = stroke_override
-    name_stroke = stroke_override
+    company_stroke = int(round(stroke_override))
+    name_stroke = int(round(stroke_override))
 
     if not is_psd:
         fcol1, fcol2 = st.columns(2)
@@ -1650,9 +1653,15 @@ if template_file and has_list:
                     st.info(f"通过图像分析自动检测到二维码区域 ({qr_box[0]},{qr_box[1]})-({qr_box[2]},{qr_box[3]})")
             except Exception:
                 pass
+        if not qr_box:
+            st.warning("未能检测到模板中的二维码区域，无法自动替换。请确认 PSD 图层名称包含「二维码」「QR」等关键词，或确认模板图片中包含可识别的二维码。")
     if qr_file and qr_box:
         qr_img = Image.open(qr_file).convert("RGBA")
-        bg = replace_qr(bg, qr_img, qr_box, original_layer_img=qr_layer_img)
+        tw = qr_box[2] - qr_box[0]
+        th = qr_box[3] - qr_box[1]
+        qr_resized = qr_img.resize((tw, th), Image.LANCZOS).convert("RGBA")
+        bg.paste(qr_resized, (qr_box[0], qr_box[1]), qr_resized)
+        st.success(f"二维码已替换（区域 {tw}x{th}px）")
 
     def build_text_items(row):
         items = []
