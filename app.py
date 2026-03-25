@@ -731,8 +731,12 @@ def generate_one(background, text_items, img_width, color, font_path):
     return img
 
 
-def check_image_quality(img, text_items, img_width, qr_box, font_path, original_img=None):
-    """Quality checks: text bounds, spacing, triple QR validation."""
+def check_image_quality(img, text_items, img_width, qr_box, font_path,
+                        original_img=None, replaced_qr_img=None):
+    """Quality checks: text bounds, spacing, triple QR validation.
+    replaced_qr_img: if user uploaded a replacement QR, pass the PIL Image here
+    to use replacement-specific checks instead of original-comparison checks.
+    """
     issues = []
 
     for item in text_items:
@@ -760,9 +764,35 @@ def check_image_quality(img, text_items, img_width, qr_box, font_path, original_
         try:
             gen_qr_crop = img.crop(crop_box).convert("RGB")
             gen_qr_arr = np.array(gen_qr_crop)
+            tw = qr_box[2] - qr_box[0]
+            th = qr_box[3] - qr_box[1]
 
-            # 4a) SSIM structural comparison with original
-            if original_img and _HAS_CV2:
+            if replaced_qr_img is not None:
+                # ── 用户上传了替换二维码：与上传的新QR对比 ──
+                ref_resized = replaced_qr_img.convert("RGB").resize((tw + pad * 2, th + pad * 2), Image.LANCZOS)
+                ref_arr = np.array(ref_resized)
+                if _HAS_CV2 and ref_arr.shape == gen_qr_arr.shape:
+                    ref_gray = cv2.cvtColor(ref_arr, cv2.COLOR_RGB2GRAY)
+                    gen_gray = cv2.cvtColor(gen_qr_arr, cv2.COLOR_RGB2GRAY)
+                    ssim_val = _compute_ssim(ref_gray, gen_gray)
+                    if ssim_val > 0.5:
+                        issues.append(("success", "替换二维码结构一致 (SSIM {:.2f})".format(ssim_val)))
+                    elif ssim_val > 0.3:
+                        issues.append(("warning", "替换二维码与上传图有差异 (SSIM {:.2f})，可能是圆角裁切".format(ssim_val)))
+                    else:
+                        issues.append(("error", "替换二维码与上传图差异过大 (SSIM {:.2f})，替换可能未生效".format(ssim_val)))
+                    ref_sharp = cv2.Laplacian(ref_gray, cv2.CV_64F).var()
+                    gen_sharp = cv2.Laplacian(gen_gray, cv2.CV_64F).var()
+                    if ref_sharp > 0:
+                        ratio = gen_sharp / ref_sharp
+                        if ratio > 0.6:
+                            issues.append(("success", "替换二维码清晰度正常 (比值 {:.2f})".format(ratio)))
+                        else:
+                            issues.append(("warning", "替换二维码清晰度下降 (比值 {:.2f})".format(ratio)))
+                else:
+                    issues.append(("info", "跳过替换二维码 SSIM 对比（尺寸不匹配或无 OpenCV）"))
+            elif original_img and _HAS_CV2:
+                # ── 未替换二维码：与原始模板 1:1 对比 ──
                 try:
                     ori_crop_box = (max(0, qr_box[0] - pad), max(0, qr_box[1] - pad),
                                     min(original_img.width, qr_box[2] + pad),
@@ -779,8 +809,6 @@ def check_image_quality(img, text_items, img_width, qr_box, font_path, original_
                             issues.append(("warning", "二维码结构有差异 (SSIM {:.2f})，可能是圆角/边缘变化".format(ssim_val)))
                         else:
                             issues.append(("error", "二维码结构严重偏差 (SSIM {:.2f})，图形可能被破坏".format(ssim_val)))
-
-                        # 4b) Relative sharpness
                         ori_sharp = cv2.Laplacian(ori_gray, cv2.CV_64F).var()
                         gen_sharp = cv2.Laplacian(gen_gray, cv2.CV_64F).var()
                         if ori_sharp > 0:
@@ -791,14 +819,12 @@ def check_image_quality(img, text_items, img_width, qr_box, font_path, original_
                                 issues.append(("warning", "二维码清晰度下降 (比值 {:.2f})".format(ratio)))
                             else:
                                 issues.append(("error", "二维码清晰度严重下降 (比值 {:.2f})".format(ratio)))
-                    else:
-                        issues.append(("warning", "二维码区域尺寸不匹配，跳过 SSIM 和清晰度对比"))
                 except Exception:
                     issues.append(("warning", "二维码 SSIM/清晰度检查异常，建议人工扫码确认"))
             elif not _HAS_CV2:
                 issues.append(("success", "OpenCV 未安装，跳过二维码结构与清晰度检查"))
 
-            # 4c) Enhanced decode with finder pattern detection
+            # 4c) decode check (always runs)
             qr_2x = Image.fromarray(gen_qr_arr).resize(
                 (gen_qr_arr.shape[1] * 2, gen_qr_arr.shape[0] * 2), Image.LANCZOS)
             qr_2x_arr = np.array(qr_2x)
@@ -1168,21 +1194,26 @@ def manual_input_dialog():
         else:
             st.session_state["manual_list_rows"] = rows
 
-@st.dialog("发现问题", width="large")
+@st.dialog("输入问题", width="large")
 def preview_issue_dialog():
-    report = st.text_input("输入问题描述", key="dlg_issue_report")
-    if st.button("确认重新生成", type="primary", use_container_width=True, key="dlg_issue_regen"):
-        if report.strip():
-            st.session_state["_do_regen"] = True
-        else:
-            st.warning("请先输入问题描述")
-    issues = st.session_state.get("single_check_issues") or []
-    if issues:
-        st.caption("分析结果：")
-        for level, msg in issues:
-            if level == "error": st.error(msg)
-            elif level == "warning": st.warning(msg)
-            elif level == "success": st.success(msg)
+    dcol1, dcol2 = st.columns(2)
+    with dcol1:
+        report = st.text_input("问题描述", key="dlg_issue_report", placeholder="请描述发现的问题...")
+    with dcol2:
+        if st.button("重新生成", type="primary", use_container_width=True, key="dlg_issue_regen"):
+            if report.strip():
+                st.session_state["_do_regen"] = True
+            else:
+                st.warning("请先输入问题描述")
+
+    preview_in_dlg = st.session_state.get("_dlg_preview_img")
+    if preview_in_dlg:
+        st.image(preview_in_dlg, use_container_width=True)
+    else:
+        st.info("点击「重新生成」后预览图将显示在此处")
+
+    if st.button("确认", type="primary", use_container_width=True, key="dlg_confirm_btn"):
+        st.session_state["_dlg_confirmed"] = True
 
 # ── UI ───────────────────────────────────────────────────
 
@@ -1732,14 +1763,9 @@ if template_file and has_list:
         if st.button("🔄 刷新预览", use_container_width=True, key="btn_refresh_preview"):
             st.session_state["_preview_refresh"] = True
     with prev_act2:
-        _zoom = st.toggle("🔍 放大查看", key="toggle_zoom_preview")
-
-    if _zoom:
-        zoom_tab1, zoom_tab2 = st.tabs(["原始模板（放大）", "替换效果（放大）"])
-        with zoom_tab1:
-            st.image(original_img, use_container_width=False)
-        with zoom_tab2:
-            st.image(preview, use_container_width=False)
+        if st.button("输入问题", use_container_width=True, key="btn_open_issue_dialog"):
+            st.session_state["_dlg_preview_img"] = preview
+            preview_issue_dialog()
 
     st.caption("预览会在字体、粗细、颜色等参数变化时自动刷新。请仔细对比两张图，确认字体大小、位置、间距、二维码是否与原图一致。")
 
@@ -1848,9 +1874,14 @@ if template_file and has_list:
                 chk_img = Image.open(io.BytesIO(all_img_data[i][1])).convert("RGBA")
                 row = rows[i] if i < len(rows) else rows[-1]
                 text_items = build_text_items(row)
+                _qr_ref = None
+                if qr_file:
+                    qr_file.seek(0)
+                    _qr_ref = Image.open(io.BytesIO(qr_file.read())).convert("RGBA")
                 issues = check_image_quality(
                     chk_img, text_items, img_width, qr_box, font_path,
                     original_img=original_img,
+                    replaced_qr_img=_qr_ref,
                 )
                 issues += compare_preview_quality(
                     original_img, chk_img, text_items, img_width,
