@@ -1167,24 +1167,7 @@ if template_file and has_list:
     st.markdown("---")
     st.caption("\u8bf7\u4ed4\u7ec6\u5bf9\u6bd4\u4e0a\u65b9\u4e24\u5f20\u56fe\uff0c\u786e\u8ba4\u5b57\u4f53\u5927\u5c0f\u3001\u4f4d\u7f6e\u3001\u95f4\u8ddd\u3001\u4e8c\u7ef4\u7801\u662f\u5426\u4e0e\u539f\u56fe\u4e00\u81f4\u3002")
 
-    if "preview_confirmed" not in st.session_state:
-        st.session_state.preview_confirmed = False
 
-    if st.session_state.get("_do_regen"):
-        st.session_state["_do_regen"] = False
-        regen_img = generate_one(bg, build_text_items(first), img_width, font_color, font_path)
-        st.session_state["regen_preview"] = regen_img
-
-    confirm_col1, confirm_col2 = st.columns(2)
-    with confirm_col1:
-        if st.button("无问题，直接下一步", type="primary", use_container_width=True, key="btn_preview_ok"):
-            st.session_state.preview_confirmed = True
-            st.rerun()
-    with confirm_col2:
-        if st.button("发现问题，点击修改", use_container_width=True, key="btn_preview_issue"):
-            preview_issue_dialog()
-
-    st.caption("可选：可先生成预览确认，也可直接进入下一步批量生成。")
 
 
     # ── generate all (always visible) ──
