@@ -117,17 +117,18 @@ st.markdown(
         font-size: 0.86rem;
         color: rgba(128, 128, 132, 0.95);
     }
-    /* file_uploader: minimal */
-    [data-testid="stFileUploaderDropzone"] { border: none; background: transparent; padding: 0; }
-    [data-testid="stFileUploaderDropzoneInstructions"] { display: none; }
-    [data-testid="stFileUploader"] label { display: none; }
-    [data-testid="stFileUploader"] small { display: none; }
-    [data-testid="stFileUploaderDropzone"] button {
-        border-radius: 980px; min-height: 2.75rem; font-size: 0;
-        position: relative; width: 100%; padding: 0 1.5rem;
+    /* file_uploader: clean style */
+    [data-testid="stFileUploaderDropzone"] {
+        border: 1px solid rgba(120,120,128,0.3);
+        border-radius: 14px;
+        background: rgba(120,120,128,0.04);
+        padding: 0.5rem;
     }
-    [data-testid="stFileUploaderDropzone"] button::after {
-        content: "点击上传"; font-size: 0.94rem; font-weight: 400; line-height: 1;
+    [data-testid="stFileUploaderDropzoneInstructions"] > div > span { display: none; }
+    [data-testid="stFileUploaderDropzoneInstructions"] > div > small { display: none; }
+    [data-testid="stFileUploaderDropzone"] button {
+        border-radius: 980px; min-height: 2.75rem; padding: 0 1.5rem;
+        font-size: 0.94rem;
     }
     /* Apple buttons */
     [data-testid="stButton"] > button, [data-testid="stDownloadButton"] > button {
