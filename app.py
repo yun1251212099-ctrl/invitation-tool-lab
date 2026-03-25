@@ -1171,88 +1171,17 @@ if template_file and has_list:
     st.caption("可选：可先生成预览确认，也可直接进入下一步批量生成。")
 
 
-    # ── step 1: preview samples ──
-    st.markdown("### \u751f\u6210\u9884\u89c8")
+    # ── generate all (always visible) ──
+    st.markdown("---")
+    st.markdown("### 生成全部")
     total = len(rows)
-    preview_count = st.radio(
-        "\u9009\u62e9\u9884\u89c8\u6570\u91cf",
-        [5, 10],
-        horizontal=True,
-        format_func=lambda x: f"\u9884\u89c8\u524d {x} \u5f20",
-    )
-    preview_count = min(preview_count, total)
 
-    gen_col1, gen_col2 = st.columns(2)
-    with gen_col1:
-        _do_gen = st.button("生成预览", type="primary", use_container_width=True)
-    with gen_col2:
-        if st.button("无需预览，直接下一步", use_container_width=True, key="btn_skip_preview"):
-            st.session_state.preview_confirmed = True
-            st.rerun()
-    if _do_gen:
-        preview_imgs = []
-        all_issues = []
-        st.session_state["preview_gallery_confirmed"] = False
-        progress = st.progress(0, text="\u6b63\u5728\u751f\u6210\u9884\u89c8...")
-        for i in range(preview_count):
-            row = rows[i]
-            text_items = build_text_items(row)
-            img = generate_one(bg, text_items, img_width, font_color, font_path)
-            fname = build_filename(row)
-            issues = check_image_quality(img, text_items, img_width, qr_box, font_path)
-            preview_imgs.append((img.copy(), fname))
-            all_issues.append((fname, issues))
-            progress.progress((i + 1) / preview_count,
-                              text=f"\u9884\u89c8 [{i+1}/{preview_count}]")
-        progress.progress(1.0, text=f"\u9884\u89c8\u5b8c\u6210! \u5171 {preview_count} \u5f20")
-        st.session_state["preview_imgs"] = preview_imgs
-        st.session_state["preview_issues"] = all_issues
+    st.markdown(f"共 **{total}** 条名单，点击下方按钮一键生成并打包下载。")
 
-    if "preview_imgs" in st.session_state and st.session_state["preview_imgs"]:
-        preview_imgs = st.session_state["preview_imgs"]
-        for i in range(0, len(preview_imgs), 3):
-            chunk = preview_imgs[i:i+3]
-            cols = st.columns(len(chunk))
-            for col, (img, caption) in zip(cols, chunk):
-                with col:
-                    st.image(img, caption=caption, use_container_width=True)
-
-        st.markdown("---")
-        with st.expander("\U0001f50d \u70b9\u51fb\u653e\u5927\u67e5\u770b\u7ec6\u8282", expanded=False):
-            selected_preview = st.selectbox(
-                "\u9009\u62e9\u56fe\u7247",
-                range(len(preview_imgs)),
-                format_func=lambda i: preview_imgs[i][1],
-            )
-            st.image(preview_imgs[selected_preview][0],
-                     caption=preview_imgs[selected_preview][1],
-                     use_container_width=False)
-
-        st.markdown("---")
-        if "preview_gallery_confirmed" not in st.session_state:
-            st.session_state["preview_gallery_confirmed"] = False
-
-        op_col1, op_col2 = st.columns(2)
-        with op_col1:
-            if st.button("有错误点击重新生成预览", use_container_width=True, key="btn_regen_preview_gallery"):
-                st.session_state["preview_gallery_confirmed"] = False
-                for k in ["preview_imgs", "preview_issues", "all_img_data", "check_done"]:
-                    st.session_state.pop(k, None)
-                st.rerun()
-        with op_col2:
-            if st.button("无问题确认效果", type="primary", use_container_width=True, key="btn_confirm_preview_gallery"):
-                st.session_state["preview_gallery_confirmed"] = True
-                st.success("已确认预览效果无问题，可以继续生成全部。")
-
-        # ── generate all ──
-        st.markdown("---")
-        st.markdown("### \u751f\u6210\u5168\u90e8")
-        if not st.session_state.get("preview_gallery_confirmed", False):
-            st.info("请先点击“无问题确认效果”，再进行全部生成。")
-        if st.button(f"\u751f\u6210\u5168\u90e8 {total} \u5f20",
-                     type="primary", use_container_width=True,
-                     ):
-            progress2 = st.progress(0, text="\u6b63\u5728\u751f\u6210...")
+    gen_all_col1, gen_all_col2 = st.columns(2)
+    with gen_all_col1:
+        if st.button(f"生成全部 {total} 张", type="primary", use_container_width=True, key="btn_gen_all"):
+            progress2 = st.progress(0, text="正在生成...")
             all_img_data = []
             for i, row in enumerate(rows):
                 fname = build_filename(row)
@@ -1260,112 +1189,61 @@ if template_file and has_list:
                 img_buf = io.BytesIO()
                 img.save(img_buf, format="PNG")
                 all_img_data.append((f"{fname}.png", img_buf.getvalue()))
-                progress2.progress((i + 1) / total,
-                                   text=f"\u6b63\u5728\u751f\u6210 [{i+1}/{total}] {fname}")
-
-            progress2.progress(1.0, text=f"\u5168\u90e8\u751f\u6210\u5b8c\u6210! \u5171 {total} \u5f20")
+                progress2.progress((i + 1) / total, text=f"正在生成 [{i+1}/{total}] {fname}")
+            progress2.progress(1.0, text=f"全部生成完成! 共 {total} 张")
             st.session_state["all_img_data"] = all_img_data
-            st.session_state["check_done"] = False
 
-    # ── quality check after generation ──
+    with gen_all_col2:
+        preview_count = st.radio(
+            "可选预览",
+            [0, 5, 10],
+            horizontal=True,
+            format_func=lambda x: "不预览" if x == 0 else f"预览前{x}张",
+            key="preview_count_radio",
+        )
+
+    if preview_count and preview_count > 0:
+        preview_count = min(preview_count, total)
+        if st.button("生成预览", use_container_width=True, key="btn_gen_preview"):
+            preview_imgs = []
+            progress = st.progress(0, text="正在生成预览...")
+            for i in range(preview_count):
+                row = rows[i]
+                img = generate_one(bg, build_text_items(row), img_width, font_color, font_path)
+                fname = build_filename(row)
+                preview_imgs.append((img.copy(), fname))
+                progress.progress((i + 1) / preview_count, text=f"预览 [{i+1}/{preview_count}]")
+            progress.progress(1.0, text=f"预览完成! 共 {preview_count} 张")
+            st.session_state["preview_imgs"] = preview_imgs
+
+        if "preview_imgs" in st.session_state and st.session_state["preview_imgs"]:
+            preview_imgs = st.session_state["preview_imgs"]
+            for i in range(0, len(preview_imgs), 3):
+                chunk = preview_imgs[i:i+3]
+                cols = st.columns(len(chunk))
+                for col, (img, caption) in zip(cols, chunk):
+                    with col:
+                        st.image(img, caption=caption, use_container_width=True)
+
+    # ── download (always visible after generation) ──
     if "all_img_data" in st.session_state and st.session_state["all_img_data"]:
         all_img_data = st.session_state["all_img_data"]
+        st.markdown("---")
+        total_gen = len(all_img_data)
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for filename, data in all_img_data:
+                zf.writestr(filename, data)
 
-        if not st.session_state.get("check_done", False):
-            st.markdown("---")
-            st.markdown("### 质量检查")
-            if st.button("🔍 一键检查所有图片", use_container_width=True):
-                check_count = min(10, len(all_img_data))
-                all_check_issues = []
-                list_issues = check_list_generation_quality(
-                    rows, enable_company, company_field, enable_name, name_field, build_filename
-                )
-                check_progress = st.progress(0, text="正在检查...")
-                for i in range(check_count):
-                    fname = all_img_data[i][0]
-                    img = Image.open(io.BytesIO(all_img_data[i][1])).convert("RGBA")
-                    row = rows[i]
-                    text_items = build_text_items(row)
-                    issues = check_image_quality(img, text_items, img_width, qr_box, font_path)
-                    all_check_issues.append((fname, issues))
-                    check_progress.progress((i + 1) / check_count, text=f"检查 [{i+1}/{check_count}]")
-                check_progress.progress(1.0, text="检查完成!")
+        st.download_button(
+            label=f"下载全部 ({total_gen} 张 ZIP)",
+            data=zip_buf.getvalue(),
+            file_name="邀请函批量生成.zip",
+            mime="application/zip",
+            type="primary",
+            use_container_width=True,
+        )
 
-                has_errors = False
-                has_warnings = False
-
-                if list_issues:
-                    st.markdown("#### 名单信息检查")
-                    for level, msg in list_issues:
-                        if level == "error":
-                            st.error(msg)
-                            has_errors = True
-                        elif level == "warning":
-                            st.warning(msg)
-                            has_warnings = True
-                        else:
-                            st.success(msg)
-
-                for fname, issues in all_check_issues:
-                    for level, msg in issues:
-                        if level == "error":
-                            st.error(f"**{fname}**: {msg}")
-                            has_errors = True
-                        elif level == "warning":
-                            st.warning(f"**{fname}**: {msg}")
-                            has_warnings = True
-
-                fix_log = build_fix_log(all_check_issues, list_issues)
-                st.session_state["fix_log_text"] = fix_log
-                st.download_button(
-                    "下载纠错日志",
-                    data=fix_log,
-                    file_name=f"纠错日志_{_dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-
-                if not has_errors and not has_warnings:
-                    st.success("✅ 全部检查通过! 字体居中 / 间距正常 / 二维码可识别")
-                    st.session_state["check_done"] = True
-                elif not has_errors:
-                    st.info("检查完成, 有轻微警告但不影响使用")
-                    st.session_state["check_done"] = True
-                else:
-                    if st.button("♻️ 自动纠错后重新生成（尝试）", type="primary", use_container_width=True):
-                        if enable_company:
-                            company_fsize = max(10, int(company_fsize) - 2)
-                        if enable_name:
-                            name_fsize = max(10, int(name_fsize) - 2)
-                        regen_data = []
-                        regen_progress = st.progress(0, text="正在自动纠错并重新生成...")
-                        for i, row in enumerate(rows):
-                            fname = build_filename(row)
-                            img = generate_one(bg, build_text_items(row), img_width, font_color, font_path)
-                            img_buf = io.BytesIO()
-                            img.save(img_buf, format="PNG")
-                            regen_data.append((f"{fname}.png", img_buf.getvalue()))
-                            regen_progress.progress((i + 1) / len(rows), text=f"重生成 [{i+1}/{len(rows)}] {fname}")
-                        st.session_state["all_img_data"] = regen_data
-                        st.session_state["check_done"] = False
-                        st.rerun()
-
-        if st.session_state.get("check_done", False):
-            st.markdown("---")
-            total_gen = len(all_img_data)
-            zip_buf = io.BytesIO()
-            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                for filename, data in all_img_data:
-                    zf.writestr(filename, data)
-
-            st.download_button(
-                label=f"\u2705 \u68c0\u67e5\u901a\u8fc7, \u4e0b\u8f7d\u5168\u90e8 ({total_gen} \u5f20 ZIP)",
-                data=zip_buf.getvalue(),
-                file_name="\u9080\u8bf7\u51fd\u6279\u91cf\u751f\u6210.zip",
-                mime="application/zip",
-                type="primary",
-                use_container_width=True,
-            )
 else:
     st.info("\u8bf7\u5148\u4e0a\u4f20\u6a21\u677f\u6587\u4ef6\u548c\u540d\u5355\u6587\u4ef6")
 
