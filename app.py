@@ -46,7 +46,6 @@ st.markdown(
     <div class="apple-hero">
       <h1>批量邀请函工作流-M2.0</h1>
       <p>上传模板与名单，预览确认后一键批量生成并下载压缩包。</p>
-      <p style="font-size:0.72rem;color:rgba(142,142,147,0.7);margin-top:4px;">{_BUILD_TAG}</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -117,7 +116,24 @@ st.markdown(
         font-size: 0.86rem;
         color: rgba(128, 128, 132, 0.95);
     }
-    /* file_uploader: use default Streamlit style */
+    /* file_uploader: compact clean style */
+    [data-testid="stFileUploaderDropzone"] {
+        border: 1px dashed rgba(120,120,128,0.35);
+        border-radius: 12px;
+        padding: 0.6rem 0.8rem;
+        background: rgba(250,250,252,0.6);
+    }
+    [data-testid="stFileUploaderDropzoneInstructions"] > div > span,
+    [data-testid="stFileUploaderDropzoneInstructions"] > div > small {
+        font-size: 0.78rem;
+        color: rgba(128,128,132,0.7);
+    }
+    [data-testid="stFileUploaderDropzone"] button {
+        border-radius: 980px;
+        min-height: 2.4rem;
+        padding: 0 1.2rem;
+        font-size: 0.88rem;
+    }
     /* Apple buttons */
     [data-testid="stButton"] > button, [data-testid="stDownloadButton"] > button {
         border-radius: 980px; min-height: 2.75rem; padding: 0 1.5rem;
