@@ -1859,12 +1859,16 @@ else:
     st.info("\u8bf7\u5148\u4e0a\u4f20\u6a21\u677f\u6587\u4ef6\u548c\u540d\u5355\u6587\u4ef6")
 
 st.markdown("---")
-with st.expander("\u57fa\u7840\u95ee\u9898\u89e3\u8bf4", expanded=False):
+with st.expander("基础问题解说", expanded=False):
     st.markdown(
-        "- \u82e5\u51fa\u73b0 `TypeError: Failed to fetch dynamically imported module`\uff0c\u901a\u5e38\u662f\u6d4f\u89c8\u5668\u7f13\u5b58\u6216\u7f51\u7edc\u62e6\u622a\u3002\n"
-        "- \u8bf7\u6309\u987a\u5e8f\u5904\u7406\uff1a\u5173\u95ed\u9875\u9762\u91cd\u5f00 \u2192 \u5f3a\u5236\u5237\u65b0\uff08Windows: `Ctrl+Shift+R`\uff0cmacOS: `Cmd+Shift+R`\uff09\u2192 \u65e0\u75d5\u7a97\u53e3\u91cd\u8bd5\u3002\n"
-        "- \u4ecd\u65e0\u6cd5\u8bbf\u95ee\u65f6\uff0c\u8bf7\u6e05\u9664 `streamlit.app` \u7ad9\u70b9\u6570\u636e\u540e\u518d\u8bd5\u3002\n"
-        "- \u672c\u5de5\u5177\u4e3a Streamlit Cloud \u516c\u7f51\u90e8\u7f72\uff0c\u4e0d\u540c\u7f51\u7edc/\u5728\u5bb6\u5747\u53ef\u4f7f\u7528\uff1b\u82e5\u4ec5\u67d0\u4e9b\u7f51\u7edc\u5931\u8d25\uff0c\u8bf7\u8054\u7cfb IT \u653e\u884c `*.streamlit.app` HTTPS \u8bbf\u95ee\u3002"
+        "- 若出现 `TypeError: Failed to fetch dynamically imported module`，通常是浏览器缓存或网络拦截。\n"
+        "- 请按顺序处理：关闭页面重开 → 强制刷新（Windows: `Ctrl+Shift+R`，macOS: `Cmd+Shift+R`）→ 无痕窗口重试。\n"
+        "- 仍无法访问时，请清除 `streamlit.app` 站点数据后再试。\n"
+        "- 本工具为 Streamlit Cloud 公网部署，不同网络/在家均可使用；若仅某些网络失败，请联系 IT 放行 `*.streamlit.app` HTTPS 访问。\n"
+        "- **建议使用浏览器无痕模式访问，速度更快、不受缓存干扰。**\n"
+        '- **如果页面卡住无响应，请点击 <a href="javascript:window.location.reload();" style="color:#0071e3;text-decoration:none;font-weight:600;">刷新</a> ，'
+        "页面会自动修复过往出现的所有问题并重新加载。**",
+        unsafe_allow_html=True,
     )
 
 st.caption(_BUILD_TAG)
