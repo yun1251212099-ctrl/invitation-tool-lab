@@ -117,19 +117,7 @@ st.markdown(
         font-size: 0.86rem;
         color: rgba(128, 128, 132, 0.95);
     }
-    /* file_uploader: clean style */
-    [data-testid="stFileUploaderDropzone"] {
-        border: 1px solid rgba(120,120,128,0.3);
-        border-radius: 14px;
-        background: rgba(120,120,128,0.04);
-        padding: 0.5rem;
-    }
-    [data-testid="stFileUploaderDropzoneInstructions"] > div > span { display: none; }
-    [data-testid="stFileUploaderDropzoneInstructions"] > div > small { display: none; }
-    [data-testid="stFileUploaderDropzone"] button {
-        border-radius: 980px; min-height: 2.75rem; padding: 0 1.5rem;
-        font-size: 0.94rem;
-    }
+    /* file_uploader: use default Streamlit style */
     /* Apple buttons */
     [data-testid="stButton"] > button, [data-testid="stDownloadButton"] > button {
         border-radius: 980px; min-height: 2.75rem; padding: 0 1.5rem;
@@ -790,7 +778,7 @@ with upload_col1:
 with upload_col2:
     list_btn_col1, list_btn_col2 = st.columns([1, 1])
     with list_btn_col1:
-        list_file = st.file_uploader("上传名单文件", type=LIST_EXTENSIONS, label_visibility="collapsed")
+        list_file = st.file_uploader("2. 上传名单文件", type=LIST_EXTENSIONS)
     with list_btn_col2:
         if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
             manual_input_dialog()
