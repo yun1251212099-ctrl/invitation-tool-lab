@@ -146,9 +146,6 @@ st.markdown(
         border-radius: 12px;
         padding: 0.6rem 0.8rem;
         background: rgba(250,250,252,0.6);
-        pointer-events: auto !important;
-        position: relative;
-        z-index: 1;
     }
     [data-testid="stFileUploaderDropzoneInstructions"] > div > span,
     [data-testid="stFileUploaderDropzoneInstructions"] > div > small {
@@ -159,12 +156,21 @@ st.markdown(
         border-radius: 980px;
         min-height: 2.4rem;
         padding: 0 1.2rem;
-        font-size: 0 !important;
-        pointer-events: auto !important;
-    }
-    [data-testid="stFileUploaderDropzone"] button::before {
-        content: "点击上传文件";
         font-size: 0.88rem;
+        color: transparent !important;
+        position: relative;
+        overflow: hidden;
+    }
+    [data-testid="stFileUploaderDropzone"] button::after {
+        content: "点击上传文件";
+        color: #1d1d1f;
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.88rem;
+        pointer-events: none;
     }
     /* Apple buttons */
     [data-testid="stButton"] > button, [data-testid="stDownloadButton"] > button {
@@ -837,12 +843,13 @@ with upload_col1:
     )
 
 with upload_col2:
-    list_file = st.file_uploader("2. 上传名单文件", type=LIST_EXTENSIONS)
-    if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
-        manual_input_dialog()
-    manual_rows = st.session_state.get("manual_list_rows", [])
-    if manual_rows:
-        st.caption(f"已手动输入 {len(manual_rows)} 条名单")
+    with st.container(border=True):
+        list_file = st.file_uploader("2. 上传名单文件", type=LIST_EXTENSIONS)
+        if st.button("手动输入名单", use_container_width=True, key="open_manual_input_dialog_btn"):
+            manual_input_dialog()
+        manual_rows = st.session_state.get("manual_list_rows", [])
+        if manual_rows:
+            st.caption(f"已手动输入 {len(manual_rows)} 条名单")
     st.markdown(
         '<div class="apple-info-card"><strong>名单规则（二选一）</strong>'
         '<span>支持 CSV、XLSX、XLS。</span>'
