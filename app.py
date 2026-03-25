@@ -1656,12 +1656,44 @@ if template_file and has_list:
         if not qr_box:
             st.warning("未能检测到模板中的二维码区域，无法自动替换。请确认 PSD 图层名称包含「二维码」「QR」等关键词，或确认模板图片中包含可识别的二维码。")
     if qr_file and qr_box:
-        qr_img = Image.open(qr_file).convert("RGBA")
+        qr_file.seek(0)
+        qr_raw = qr_file.read()
+        qr_img = Image.open(io.BytesIO(qr_raw)).convert("RGBA")
         tw = qr_box[2] - qr_box[0]
         th = qr_box[3] - qr_box[1]
         qr_resized = qr_img.resize((tw, th), Image.LANCZOS).convert("RGBA")
+
+        corner_mask = None
+        if qr_layer_img is not None:
+            try:
+                lyr = qr_layer_img.convert("RGBA").resize((tw, th), Image.LANCZOS)
+                alpha_arr = np.array(lyr.split()[3])
+                if alpha_arr.min() < 250:
+                    corner_mask = Image.fromarray(alpha_arr)
+            except Exception:
+                corner_mask = None
+        if corner_mask is None:
+            ori_region = original_img.crop(qr_box).convert("RGBA")
+            ori_resized = ori_region.resize((tw, th), Image.LANCZOS)
+            ori_alpha_arr = np.array(ori_resized.split()[3])
+            if ori_alpha_arr.min() < 250:
+                corner_mask = Image.fromarray(ori_alpha_arr)
+
+        if corner_mask is not None:
+            r, g, b, a = qr_resized.split()
+            merged_alpha = Image.fromarray(
+                np.minimum(np.array(a), np.array(corner_mask)).astype(np.uint8)
+            )
+            qr_resized = Image.merge("RGBA", (r, g, b, merged_alpha))
+
+        before_crop = np.array(bg.crop(qr_box).convert("RGB"))
         bg.paste(qr_resized, (qr_box[0], qr_box[1]), qr_resized)
-        st.success(f"二维码已替换（区域 {tw}x{th}px）")
+        after_crop = np.array(bg.crop(qr_box).convert("RGB"))
+        pixel_diff = float(np.abs(after_crop.astype(np.int16) - before_crop.astype(np.int16)).mean())
+        if pixel_diff > 5:
+            st.success(f"二维码已替换（区域 {tw}x{th}px，差异 {pixel_diff:.1f}，{'已保留圆角' if corner_mask is not None else '直角'}）")
+        else:
+            st.error(f"二维码替换异常：粘贴后像素差异仅 {pixel_diff:.1f}，可能替换未生效。请检查上传的二维码图片是否正确。")
 
     def build_text_items(row):
         items = []
