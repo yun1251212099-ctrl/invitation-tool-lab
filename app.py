@@ -704,9 +704,20 @@ def parse_spreadsheet(uploaded):
         return [], []
 
     df = df.dropna(how="all")
+    df = df.loc[:, ~df.columns.astype(str).str.match(r"^Unnamed")]
+    df = df.dropna(axis=1, how="all")
+    if df.empty:
+        return [], []
+    first_col = df.iloc[:, 0]
+    df = df[first_col.notna() & (first_col.astype(str).str.strip() != "") & (first_col.astype(str) != "nan")]
     df.columns = [str(c).strip() for c in df.columns]
     fields = list(df.columns)
+    df = df.fillna("")
     rows = df.astype(str).to_dict("records")
+    for row in rows:
+        for k, v in row.items():
+            if v == "nan":
+                row[k] = ""
     return rows, fields
 
 
@@ -966,24 +977,39 @@ if template_file and has_list:
             mapping_ok = False
 
     if mapping_ok and enable_name and name_field:
-        sample_names = [rows[i][name_field] for i in range(min(200, len(rows)))]
+        sample_names = [rows[i][name_field] for i in range(min(3, len(rows)))]
         long_names = [n for n in sample_names if len(n) > 4]
         if long_names:
             st.warning(f"\u4eba\u540d\u5b57\u6bb5\u4e2d\u53d1\u73b0\u8f83\u957f\u7684\u503c: \u300c{'、'.join(long_names)}\u300d\uff0c\u8bf7\u786e\u8ba4\u662f\u5426\u9009\u5bf9\u4e86\u5b57\u6bb5")
 
-    # ── mapping preview table ──
+    # ── editable name preview ──
     if mapping_ok:
-        st.markdown("**\u6620\u5c04\u9884\u89c8 (\u524d3\u884c):**")
+        preview_n = min(180, len(rows))
+        st.markdown(f"**名单预览（前 {preview_n} 名）：**")
         preview_data = []
-        for i in range(min(200, len(rows))):
+        col_map = {}
+        for i in range(preview_n):
             row_preview = {}
             if enable_company and company_field:
-                row_preview["\u516c\u53f8\u540d"] = rows[i][company_field]
+                row_preview["公司名"] = rows[i].get(company_field, "")
+                col_map["公司名"] = company_field
             if enable_name and name_field:
-                row_preview["\u4eba\u540d"] = rows[i][name_field]
+                row_preview["人名"] = rows[i].get(name_field, "")
+                col_map["人名"] = name_field
             preview_data.append(row_preview)
         if preview_data:
-            st.table(preview_data)
+            preview_df = pd.DataFrame(preview_data)
+            edited_df = st.data_editor(
+                preview_df, num_rows="fixed",
+                use_container_width=True, key="name_editor",
+            )
+            for idx, row_edit in edited_df.iterrows():
+                if idx < len(rows):
+                    for col_label, field_key in col_map.items():
+                        new_val = str(row_edit.get(col_label, ""))
+                        if new_val != "nan":
+                            rows[idx][field_key] = new_val
+
 
     if not mapping_ok:
         st.stop()
@@ -1167,7 +1193,14 @@ if template_file and has_list:
     )
     preview_count = min(preview_count, total)
 
-    if st.button("\u751f\u6210\u9884\u89c8", type="secondary", use_container_width=True):
+    gen_col1, gen_col2 = st.columns(2)
+    with gen_col1:
+        _do_gen = st.button("生成预览", type="primary", use_container_width=True)
+    with gen_col2:
+        if st.button("无需预览，直接下一步", use_container_width=True, key="btn_skip_preview"):
+            st.session_state.preview_confirmed = True
+            st.rerun()
+    if _do_gen:
         preview_imgs = []
         all_issues = []
         st.session_state["preview_gallery_confirmed"] = False
@@ -1229,7 +1262,7 @@ if template_file and has_list:
             st.info("请先点击“无问题确认效果”，再进行全部生成。")
         if st.button(f"\u751f\u6210\u5168\u90e8 {total} \u5f20",
                      type="primary", use_container_width=True,
-                     disabled=not st.session_state.get("preview_gallery_confirmed", False)):
+                     ):
             progress2 = st.progress(0, text="\u6b63\u5728\u751f\u6210...")
             all_img_data = []
             for i, row in enumerate(rows):
