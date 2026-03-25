@@ -232,23 +232,9 @@ st.markdown(
         font-size: 0.86rem;
         color: rgba(128, 128, 132, 0.95);
     }
-    /* file_uploader: compact clean style */
-    [data-testid="stFileUploaderDropzone"] {
-        border: 1px dashed rgba(120,120,128,0.35);
-        border-radius: 12px;
-        padding: 0.6rem 0.8rem;
-        background: rgba(250,250,252,0.6);
-    }
-    [data-testid="stFileUploaderDropzoneInstructions"] > div > span,
+    /* file_uploader: safe minimal style — no layout/interaction overrides */
     [data-testid="stFileUploaderDropzoneInstructions"] > div > small {
-        font-size: 0.78rem;
-        color: rgba(128,128,132,0.7);
-    }
-    [data-testid="stFileUploaderDropzone"] button {
-        border-radius: 980px;
-        min-height: 2.4rem;
-        padding: 0 1.2rem;
-        font-size: 0.88rem;
+        font-size: 0.82rem;
     }
     /* Apple buttons */
     [data-testid="stButton"] > button, [data-testid="stDownloadButton"] > button {
@@ -1152,7 +1138,6 @@ def manual_input_dialog():
         elif not rows: st.warning('请至少输入一条名单。')
         else:
             st.session_state["manual_list_rows"] = rows
-            st.rerun()
 
 @st.dialog("发现问题", width="large")
 def preview_issue_dialog():
