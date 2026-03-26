@@ -294,6 +294,89 @@ def scan_fonts():
     return dict(sorted(fonts.items()))
 
 
+def _normalize_font_token(name: str) -> str:
+    if not name:
+        return ""
+    s = str(name).lower().replace("-", " ").replace("_", " ")
+    s = _re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", s)
+    parts = [p for p in s.split() if p]
+    stop = {
+        "regular", "normal", "medium", "bold", "semibold", "demibold",
+        "black", "heavy", "light", "thin", "italic", "oblique", "book",
+        "roman", "std", "mt", "ps", "pro",
+    }
+    filtered = [p for p in parts if p not in stop]
+    return "".join(filtered) if filtered else "".join(parts)
+
+
+def extract_psd_font_candidates(psd):
+    """Extract font names from PSD text layers resource dict."""
+    out = []
+    seen = set()
+    for tl in psd.descendants():
+        if tl.kind != "type":
+            continue
+        try:
+            ss = tl.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
+            fs = tl.engine_dict.get("ResourceDict", {}).get("FontSet", [])
+            fi = int(ss.get("Font", 0))
+            if fi >= len(fs):
+                continue
+            entry = fs[fi]
+            raw_name = str(entry.get("Name", "")).strip()
+            family = str(entry.get("FamilyName", "")).strip()
+            style = str(entry.get("StyleName", "")).strip()
+            cand = {
+                "raw": raw_name, "family": family, "style": style,
+                "token_raw": _normalize_font_token(raw_name),
+                "token_family": _normalize_font_token(family),
+            }
+            key = (cand["raw"], cand["family"], cand["style"])
+            if key not in seen:
+                seen.add(key)
+                out.append(cand)
+        except Exception:
+            continue
+    return out
+
+
+def build_local_font_index(fonts_dict):
+    """Build strict token->font-display/path index from scan_fonts()."""
+    index = {}
+    for display, path in (fonts_dict or {}).items():
+        family = display
+        style = ""
+        if display.endswith(")") and " (" in display:
+            family, style = display.rsplit(" (", 1)
+            style = style[:-1]
+        tokens = {
+            _normalize_font_token(display),
+            _normalize_font_token(family),
+            _normalize_font_token(f"{family} {style}"),
+            _normalize_font_token(Path(path).stem),
+        }
+        for tk in [t for t in tokens if t]:
+            if tk not in index:
+                index[tk] = {"display": display, "path": path}
+    return index
+
+
+def match_psd_fonts_to_local(psd_fonts, local_index):
+    matched, unmatched = [], []
+    for cand in psd_fonts or []:
+        pick = None
+        for tk in [cand.get("token_raw", ""), cand.get("token_family", "")]:
+            if tk and tk in local_index:
+                pick = local_index[tk]
+                break
+        if pick:
+            matched.append({"psd": cand, "local": pick})
+        else:
+            unmatched.append(cand)
+    recommended = matched[0]["local"]["display"] if matched else None
+    return matched, unmatched, recommended
+
+
 def get_default_font_path():
     medium = FONTS_DIR / "OPPOSans-Medium.ttf"
     if medium.exists():
@@ -1535,31 +1618,42 @@ if template_file and has_list:
     if not mapping_ok:
         st.stop()
 
-    # ── font selection ──
+    # ── font selection (with auto-match for PSD/PSB) ──
     st.markdown("### \u5b57\u4f53\u9009\u62e9")
 
+    all_fonts = scan_fonts()
+    font_names = list(all_fonts.keys())
+    psd_candidates = []
+    psd_matched = []
+    psd_unmatched = []
+    psd_recommended = None
     if is_psd:
-        psd_font_names = set()
-        for _tl in psd.descendants():
-            if _tl.kind == "type":
-                try:
-                    _ss = _tl.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
-                    _fs = _tl.engine_dict.get("ResourceDict", {}).get("FontSet", [])
-                    _fi = int(_ss.get("Font", 0))
-                    if _fi < len(_fs):
-                        psd_font_names.add(_fs[_fi].get("Name", ""))
-                except Exception:
-                    pass
-        if psd_font_names:
-            with st.expander("\u6a21\u677f\u5185\u6807\u6ce8\u5b57\u4f53\uff08\u4ec5\u4f9b\u53c2\u8003\uff09", expanded=False):
-                st.caption("\u4ee5\u4e0b\u662f PSD \u56fe\u5c42\u4e2d\u8bb0\u5f55\u7684\u5b57\u4f53\u540d\uff0c\u5b9e\u9645\u6e32\u67d3\u4ee5\u4e0b\u65b9\u9009\u62e9\u7684\u5b57\u4f53\u4e3a\u51c6\u3002")
-                for _fn in sorted(psd_font_names):
-                    st.text(f"  \u2022 {_fn}")
+        psd_candidates = extract_psd_font_candidates(psd)
+        _fidx = build_local_font_index(all_fonts)
+        psd_matched, psd_unmatched, psd_recommended = match_psd_fonts_to_local(psd_candidates, _fidx)
+        if psd_candidates:
+            with st.expander("\u6a21\u677f\u5185\u6807\u6ce8\u5b57\u4f53\uff08PSD \u7cbe\u786e\u8bc6\u522b\uff09", expanded=False):
+                if psd_matched:
+                    st.caption("\u5df2\u5339\u914d\u5230\u672c\u5730\u5b57\u4f53\uff1a")
+                    for _m in psd_matched[:12]:
+                        st.text(f"  \u2022 {_m['psd'].get('raw') or _m['psd'].get('family')} \u2192 {_m['local']['display']}")
+                if psd_unmatched:
+                    st.caption("\u672a\u5339\u914d\u5230\u672c\u5730\u7684 PSD \u5b57\u4f53\uff1a")
+                    for _u in psd_unmatched[:12]:
+                        st.text(f"  \u2022 {_u.get('raw') or _u.get('family')}")
+                if not psd_unmatched and psd_matched:
+                    st.success("PSD \u5b57\u4f53\u672c\u5730\u5339\u914d\u5b8c\u6210")
 
+    _pref_path = st.session_state.get("_preferred_font_path")
+    _pref_label = st.session_state.get("_preferred_font_label", "")
+    _has_pref = bool(_pref_path and os.path.exists(str(_pref_path)))
+    _default_src = 2 if _has_pref else (1 if (is_psd and psd_recommended) else 0)
     font_source = st.radio(
-        "字体来源",
+        "\u5b57\u4f53\u6765\u6e90",
         ["\u9ed8\u8ba4 OPPO \u5b57\u4f53", "\u7535\u8111\u672c\u5730\u5b57\u4f53", "\u4e0a\u4f20\u81ea\u5b9a\u4e49\u5b57\u4f53"],
+        index=_default_src,
         horizontal=True,
+        key="font_source_radio",
         help="\u9009\u62e9\u5b57\u4f53\u6765\u6e90\uff1a\u9ed8\u8ba4\u5185\u7f6e\u3001\u670d\u52a1\u5668\u672c\u5730\u5b57\u4f53\u3001\u6216\u4e0a\u4f20 .ttf/.otf \u6587\u4ef6",
     )
     custom_font_file = None
@@ -1575,7 +1669,7 @@ if template_file and has_list:
         if _oppo_options:
             if len(_oppo_options) > 1:
                 _oppo_choice = st.radio(
-                    "选择 OPPO 字体版本",
+                    "\u9009\u62e9 OPPO \u5b57\u4f53\u7248\u672c",
                     list(_oppo_options.keys()),
                     horizontal=True,
                     key="oppo_font_choice",
@@ -1583,19 +1677,21 @@ if template_file and has_list:
             else:
                 _oppo_choice = list(_oppo_options.keys())[0]
             font_path = _oppo_options[_oppo_choice]
-            st.success(f"已使用默认字体 {_oppo_choice}")
+            st.success(f"\u5df2\u4f7f\u7528\u9ed8\u8ba4\u5b57\u4f53 {_oppo_choice}")
         else:
-            st.error("默认字体未找到，请切换到「上传自定义字体」")
+            st.error("\u9ed8\u8ba4\u5b57\u4f53\u672a\u627e\u5230\uff0c\u8bf7\u5207\u6362\u5230\u300c\u4e0a\u4f20\u81ea\u5b9a\u4e49\u5b57\u4f53\u300d")
             st.stop()
     elif font_source == "\u7535\u8111\u672c\u5730\u5b57\u4f53":
-        all_fonts = scan_fonts()
-        font_names = list(all_fonts.keys())
         if font_names:
             default_idx = 0
-            for i, name in enumerate(font_names):
-                if "OPPO Sans 4.0" in name:
-                    default_idx = i
-                    break
+            if is_psd and psd_recommended and psd_recommended in font_names:
+                default_idx = font_names.index(psd_recommended)
+                st.info(f"\u5df2\u81ea\u52a8\u8bc6\u522b PSD \u5b57\u4f53\uff0c\u9ed8\u8ba4\u5339\u914d\u672c\u5730\u5b57\u4f53\uff1a{psd_recommended}")
+            else:
+                for i, name in enumerate(font_names):
+                    if "OPPO Sans 4.0" in name:
+                        default_idx = i
+                        break
             selected_font = st.selectbox(
                 "\u7535\u8111\u672c\u5730\u5b57\u4f53\u9009\u62e9",
                 font_names,
@@ -1603,6 +1699,8 @@ if template_file and has_list:
                 help=f"\u5df2\u626b\u63cf\u5230 {len(font_names)} \u4e2a\u53ef\u7528\u5b57\u4f53",
             )
             font_path = all_fonts[selected_font]
+            st.session_state["_preferred_font_path"] = font_path
+            st.session_state["_preferred_font_label"] = selected_font
         else:
             st.warning("\u672a\u626b\u63cf\u5230\u672c\u5730\u5b57\u4f53\uff0c\u5df2\u56de\u9000\u5230\u9ed8\u8ba4\u5b57\u4f53")
             font_path = get_default_font_path()
@@ -1615,21 +1713,29 @@ if template_file and has_list:
             type=["ttf", "otf"],
         )
         if custom_font_file:
-            font_tmp = tempfile.NamedTemporaryFile(suffix=file_suffix(custom_font_file), delete=False)
-            font_tmp.write(custom_font_file.getvalue())
-            font_tmp.flush()
-            font_path = font_tmp.name
+            _rt_dir = APP_DIR / ".runtime" / "uploaded-fonts"
+            _rt_dir.mkdir(parents=True, exist_ok=True)
+            _dst = _rt_dir / f"active_custom_font{file_suffix(custom_font_file)}"
+            _dst.write_bytes(custom_font_file.getvalue())
+            font_path = str(_dst)
             st.session_state["_custom_font_active"] = True
             try:
                 family, style = ImageFont.truetype(font_path, 20).getname()
                 st.success(f"\u5df2\u52a0\u8f7d\u81ea\u5b9a\u4e49\u5b57\u4f53\uff1a{family} ({style})")
+                st.session_state["_preferred_font_path"] = font_path
+                st.session_state["_preferred_font_label"] = f"{family} ({style})"
             except Exception as e:
                 st.error(f"\u5b57\u4f53\u6587\u4ef6\u65e0\u6cd5\u52a0\u8f7d: {e}")
                 font_path = get_default_font_path()
         else:
-            st.session_state["_custom_font_active"] = False
-            st.info("\u8bf7\u4e0a\u4f20\u5b57\u4f53\u6587\u4ef6\uff0c\u6216\u5207\u6362\u5230\u5176\u4ed6\u5b57\u4f53\u6765\u6e90")
-            font_path = get_default_font_path()
+            if _has_pref:
+                font_path = str(_pref_path)
+                st.session_state["_custom_font_active"] = True
+                st.success(f"\u5df2\u81ea\u52a8\u5e94\u7528\u4e0a\u6b21\u4e0a\u4f20\u5b57\u4f53\uff1a{_pref_label or Path(str(_pref_path)).name}")
+            else:
+                st.session_state["_custom_font_active"] = False
+                st.info("\u8bf7\u4e0a\u4f20\u5b57\u4f53\u6587\u4ef6\uff0c\u6216\u5207\u6362\u5230\u5176\u4ed6\u5b57\u4f53\u6765\u6e90")
+                font_path = get_default_font_path()
 
     # ── re-calibrate positions for the chosen font ──
     if is_psd and font_path:
