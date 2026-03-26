@@ -288,8 +288,14 @@ def scan_fonts():
                     continue
                 path = os.path.join(dirpath, f)
                 try:
-                    family, style = ImageFont.truetype(path, 20).getname()
-                    display = f"{family} ({style})"
+                    font_obj = ImageFont.truetype(path, 20)
+                    family, style = font_obj.getname()
+                    has_garble = "?" in family or "\ufffd" in family
+                    if has_garble:
+                        stem = Path(f).stem
+                        display = f"{stem} ({style})" if style and "?" not in style else stem
+                    else:
+                        display = f"{family} ({style})"
                     fonts[display] = path
                 except Exception:
                     pass
@@ -1954,12 +1960,23 @@ if template_file and has_list:
     _hist = [h for h in _hist if isinstance(h, dict) and os.path.exists(str(h.get("path", "")))]
     st.session_state["_font_history"] = _hist[:20]
 
+    def _show_layer_font_detail(plf, lfm, fallback_label):
+        """Display per-layer font assignment detail."""
+        if not plf or not lfm:
+            return
+        for lname, psname in lfm.items():
+            fpath = plf.get(lname, "")
+            fname = Path(fpath).stem if fpath else fallback_label
+            is_fallback = (fpath == _fallback_font_path) or not fpath
+            tag = "\uff08\u56de\u9000\u9ed8\u8ba4\uff09" if is_fallback else "\uff08\u5339\u914d\u6210\u529f\uff09"
+            st.caption(f"  \u2022 \u56fe\u5c42\u300c{lname}\u300d\u6e90\u6587\u4ef6\u5b57\u4f53: {psname} \u2192 {fname} {tag}")
+
     if font_source == "\u9ed8\u8ba4\u5b57\u4f53":
         if is_psd:
-            # per-layer auto match first, fallback to OPPO
             per_layer_fonts = resolve_per_layer_font_path(layer_font_map, _fidx, _fallback_font_path)
             font_path = _fallback_font_path
-            st.success("\u9ed8\u8ba4\u5b57\u4f53\u5df2\u81ea\u52a8\u6309 PSD \u56fe\u5c42\u5339\u914d\uff08\u672a\u5339\u914d\u56de\u9000 OPPO\uff09")
+            st.success("\u9ed8\u8ba4\u5b57\u4f53\u5df2\u81ea\u52a8\u6309 PSD \u56fe\u5c42\u5339\u914d")
+            _show_layer_font_detail(per_layer_fonts, layer_font_map, _fallback_font_label)
         else:
             font_path = _fallback_font_path
             st.success(f"\u5df2\u4f7f\u7528\u9ed8\u8ba4\u5b57\u4f53 {_fallback_font_label}")
@@ -2007,7 +2024,8 @@ if template_file and has_list:
                 _up_idx = build_local_font_index(uploaded_only)
                 per_layer_fonts = resolve_per_layer_font_path(layer_font_map, _up_idx, _fallback_font_path)
                 font_path = _fallback_font_path
-                st.success("\u5df2\u6309 PSD \u56fe\u5c42\u5c1d\u8bd5\u5339\u914d\u4e0a\u4f20\u5b57\u4f53\uff08\u672a\u5339\u914d\u56de\u9000\u9ed8\u8ba4\uff09")
+                st.success("\u5df2\u6309 PSD \u56fe\u5c42\u5339\u914d\u4e0a\u4f20\u5b57\u4f53")
+                _show_layer_font_detail(per_layer_fonts, layer_font_map, _fallback_font_label)
                 for d, p in uploaded_only.items():
                     push_font_history(d, p)
             else:
