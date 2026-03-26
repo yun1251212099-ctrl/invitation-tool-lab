@@ -2,6 +2,7 @@
 """批量邀请函生成工具 — Streamlit Web 应用 v3 (Cloud)"""
 
 import csv
+import base64
 import io
 import os
 import tempfile
@@ -16,6 +17,7 @@ except ImportError:
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
 try:
     from psd_tools import PSDImage
@@ -586,13 +588,41 @@ def calibrate_font_size(font_path, text, target_height, raw_size):
 
 
 def get_font_color(psd):
-    """Extract text color from PSD."""
+    """Extract text color from the first PSD text layer (global fallback)."""
     for l in psd.descendants():
         if l.kind == "type":
-            ss = l.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
-            color_vals = ss.get("FillColor", {}).get("Values", [1.0, 1.0, 1.0, 1.0])
-            return tuple(int(v * 255) for v in color_vals)
+            try:
+                ss = l.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
+                vals = ss.get("FillColor", {}).get("Values", [1.0, 0.0, 0.0, 0.0])
+                if len(vals) == 4:
+                    r, g, b = int(vals[1] * 255), int(vals[2] * 255), int(vals[3] * 255)
+                    return (r, g, b, 255)
+                elif len(vals) == 2:
+                    gray = int(vals[1] * 255)
+                    return (gray, gray, gray, 255)
+            except Exception:
+                continue
     return (255, 255, 255, 255)
+
+
+def extract_per_layer_color(psd):
+    """Return {layer_name: (R, G, B, A)} for each text layer."""
+    out = {}
+    for l in psd.descendants():
+        if l.kind != "type":
+            continue
+        try:
+            ss = l.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
+            vals = ss.get("FillColor", {}).get("Values", [1.0, 0.0, 0.0, 0.0])
+            if len(vals) == 4:
+                r, g, b = int(vals[1] * 255), int(vals[2] * 255), int(vals[3] * 255)
+                out[l.name] = (r, g, b, 255)
+            elif len(vals) == 2:
+                gray = int(vals[1] * 255)
+                out[l.name] = (gray, gray, gray, 255)
+        except Exception:
+            continue
+    return out
 
 
 def get_text_layer_positions(psd, font_path=None, per_layer_fonts=None):
@@ -831,16 +861,17 @@ def _compute_ssim(img_a, img_b):
 
 
 def generate_one(background, text_items, img_width, color, font_path):
-    """text_items: list of (text_str, center_y, font_size[, stroke_width])."""
+    """text_items: list of (text, cy, fsize[, stroke_w[, font_path[, color]]])."""
     img = background.copy()
     draw = ImageDraw.Draw(img)
     for item in text_items:
         text, cy, fsize = item[0], item[1], item[2]
         sw = item[3] if len(item) > 3 else 0
         item_font_path = item[4] if len(item) > 4 and item[4] else font_path
+        item_color = item[5] if len(item) > 5 and item[5] else color
         if text:
             f = ImageFont.truetype(item_font_path, fsize)
-            draw_centered_text(draw, f, text, cy, img_width, color,
+            draw_centered_text(draw, f, text, cy, img_width, item_color,
                                stroke_width=sw, target_img=img)
     return img
 
@@ -1322,7 +1353,162 @@ def preview_issue_dialog():
 
     preview_in_dlg = st.session_state.get("_dlg_preview_img")
     if preview_in_dlg:
-        st.image(preview_in_dlg, use_container_width=True)
+        buf = io.BytesIO()
+        preview_in_dlg.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        iw, ih = preview_in_dlg.size
+        viewer_html = f"""
+        <div id="viewer-wrap" style="height:500px;position:relative;overflow:hidden;border:1px solid rgba(120,120,128,.28);border-radius:12px;">
+          <canvas id="viewer-canvas" style="width:100%;height:100%;display:block;cursor:grab;background:
+            linear-gradient(45deg,#f5f5f7 25%,transparent 25%,transparent 75%,#f5f5f7 75%,#f5f5f7) 0 0/24px 24px,
+            linear-gradient(45deg,#f5f5f7 25%,transparent 25%,transparent 75%,#f5f5f7 75%,#f5f5f7) 12px 12px/24px 24px,
+            #fff;"></canvas>
+          <div id="zoom-badge" style="position:absolute;left:10px;bottom:10px;background:rgba(29,29,31,.75);color:#fff;padding:4px 8px;border-radius:999px;font-size:12px;">100%</div>
+        </div>
+        <script>
+          (() => {{
+            const wrap = document.getElementById("viewer-wrap");
+            const canvas = document.getElementById("viewer-canvas");
+            const badge = document.getElementById("zoom-badge");
+            const ctx = canvas.getContext("2d");
+            const img = new Image();
+            img.src = "data:image/png;base64,{b64}";
+
+            let scale = 1.0;
+            let minScale = 0.2;
+            let maxScale = 8.0;
+            let tx = 0, ty = 0;
+            let dragging = false;
+            let lx = 0, ly = 0;
+            let pinchStartDist = 0;
+            let pinchStartScale = 1;
+            let pinchCenter = null;
+
+            function resizeCanvas() {{
+              const r = wrap.getBoundingClientRect();
+              const dpr = window.devicePixelRatio || 1;
+              canvas.width = Math.floor(r.width * dpr);
+              canvas.height = Math.floor(r.height * dpr);
+              canvas.style.width = r.width + "px";
+              canvas.style.height = r.height + "px";
+              ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+              draw();
+            }}
+
+            function draw() {{
+              const r = wrap.getBoundingClientRect();
+              const vw = r.width, vh = r.height;
+              ctx.clearRect(0, 0, vw, vh);
+              if (!img.complete) return;
+              ctx.save();
+              ctx.translate(tx, ty);
+              ctx.scale(scale, scale);
+              ctx.drawImage(img, 0, 0);
+              ctx.restore();
+              badge.textContent = Math.round(scale * 100) + "%";
+            }}
+
+            function clamp(v, a, b) {{ return Math.max(a, Math.min(b, v)); }}
+
+            function zoomAt(factor, cx, cy) {{
+              const oldScale = scale;
+              const next = clamp(scale * factor, minScale, maxScale);
+              if (next === oldScale) return;
+              const px = (cx - tx) / oldScale;
+              const py = (cy - ty) / oldScale;
+              scale = next;
+              tx = cx - px * scale;
+              ty = cy - py * scale;
+              draw();
+            }}
+
+            img.onload = () => {{
+              // default: 1:1 actual size, centered in viewport
+              const r = wrap.getBoundingClientRect();
+              tx = (r.width - {iw}) / 2;
+              ty = (r.height - {ih}) / 2;
+              scale = 1.0;
+              resizeCanvas();
+            }};
+
+            window.addEventListener("resize", resizeCanvas);
+            canvas.addEventListener("wheel", (e) => {{
+              e.preventDefault();
+              const rect = canvas.getBoundingClientRect();
+              const cx = e.clientX - rect.left;
+              const cy = e.clientY - rect.top;
+              zoomAt(e.deltaY < 0 ? 1.1 : 1 / 1.1, cx, cy);
+            }}, {{ passive: false }});
+
+            canvas.addEventListener("dblclick", (e) => {{
+              const r = wrap.getBoundingClientRect();
+              scale = 1.0;
+              tx = (r.width - {iw}) / 2;
+              ty = (r.height - {ih}) / 2;
+              draw();
+            }});
+
+            canvas.addEventListener("mousedown", (e) => {{
+              dragging = true;
+              lx = e.clientX; ly = e.clientY;
+              canvas.style.cursor = "grabbing";
+            }});
+            window.addEventListener("mouseup", () => {{
+              dragging = false;
+              canvas.style.cursor = "grab";
+            }});
+            window.addEventListener("mousemove", (e) => {{
+              if (!dragging) return;
+              tx += e.clientX - lx;
+              ty += e.clientY - ly;
+              lx = e.clientX; ly = e.clientY;
+              draw();
+            }});
+
+            function touchDist(t0, t1) {{
+              const dx = t0.clientX - t1.clientX;
+              const dy = t0.clientY - t1.clientY;
+              return Math.hypot(dx, dy);
+            }}
+            function touchCenter(t0, t1, rect) {{
+              return {{
+                x: ((t0.clientX + t1.clientX) / 2) - rect.left,
+                y: ((t0.clientY + t1.clientY) / 2) - rect.top
+              }};
+            }}
+            canvas.addEventListener("touchstart", (e) => {{
+              if (e.touches.length === 1) {{
+                dragging = true;
+                lx = e.touches[0].clientX; ly = e.touches[0].clientY;
+              }} else if (e.touches.length === 2) {{
+                const rect = canvas.getBoundingClientRect();
+                pinchStartDist = touchDist(e.touches[0], e.touches[1]);
+                pinchStartScale = scale;
+                pinchCenter = touchCenter(e.touches[0], e.touches[1], rect);
+              }}
+            }}, {{ passive: true }});
+            canvas.addEventListener("touchmove", (e) => {{
+              if (e.touches.length === 1 && dragging) {{
+                tx += e.touches[0].clientX - lx;
+                ty += e.touches[0].clientY - ly;
+                lx = e.touches[0].clientX; ly = e.touches[0].clientY;
+                draw();
+              }} else if (e.touches.length === 2 && pinchStartDist > 0) {{
+                const dist = touchDist(e.touches[0], e.touches[1]);
+                const ratio = dist / pinchStartDist;
+                const target = clamp(pinchStartScale * ratio, minScale, maxScale);
+                const factor = target / scale;
+                zoomAt(factor, pinchCenter.x, pinchCenter.y);
+              }}
+            }}, {{ passive: true }});
+            canvas.addEventListener("touchend", () => {{
+              dragging = false;
+              pinchStartDist = 0;
+            }});
+          }})();
+        </script>
+        """
+        components.html(viewer_html, height=510)
     else:
         st.info("点击「重新生成」后预览图将显示在此处")
 
@@ -1569,6 +1755,8 @@ if template_file and has_list:
     name_stroke = 0
     company_font_path = None
     name_font_path = None
+    company_color = None
+    name_color = None
     company_layer = None
     name_layer = None
 
@@ -1662,10 +1850,12 @@ if template_file and has_list:
     psd_recommended = None
     layer_font_map = {}
     per_layer_fonts = {}
+    per_layer_colors = {}
     if is_psd:
         psd_candidates = extract_psd_font_candidates(psd)
         psd_matched, psd_unmatched, psd_recommended = match_psd_fonts_to_local(psd_candidates, _fidx)
         layer_font_map = extract_per_layer_font(psd)
+        per_layer_colors = extract_per_layer_color(psd)
         if psd_candidates:
             with st.expander("\u6a21\u677f\u5185\u6807\u6ce8\u5b57\u4f53\uff08PSD \u7cbe\u786e\u8bc6\u522b\uff09", expanded=False):
                 if psd_matched:
@@ -1791,11 +1981,13 @@ if template_file and has_list:
             company_fsize = positions[company_layer][1]
             company_stroke = positions[company_layer][3]
             company_font_path = per_layer_fonts.get(company_layer, font_path)
+            company_color = per_layer_colors.get(company_layer, font_color)
         if enable_name and name_layer and name_layer in positions:
             name_y = positions[name_layer][0]
             name_fsize = positions[name_layer][1]
             name_stroke = positions[name_layer][3]
             name_font_path = per_layer_fonts.get(name_layer, font_path)
+            name_color = per_layer_colors.get(name_layer, font_color)
 
     # ── font weight ──
     auto_stroke = max(company_stroke, name_stroke)
@@ -1885,9 +2077,9 @@ if template_file and has_list:
     def build_text_items(row):
         items = []
         if enable_company and company_field:
-            items.append((row[company_field], company_y, company_fsize, company_stroke, company_font_path or font_path))
+            items.append((row[company_field], company_y, company_fsize, company_stroke, company_font_path or font_path, company_color or font_color))
         if enable_name and name_field:
-            items.append((row[name_field], name_y, name_fsize, name_stroke, name_font_path or font_path))
+            items.append((row[name_field], name_y, name_fsize, name_stroke, name_font_path or font_path, name_color or font_color))
         return items
 
     def build_filename(row):
