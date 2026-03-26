@@ -408,6 +408,23 @@ def resolve_per_layer_font_path(layer_font_map, local_index, fallback_path):
     return resolved
 
 
+def push_font_history(display: str, path: str, max_items: int = 20):
+    if not display or not path:
+        return
+    hist = st.session_state.get("_font_history", [])
+    keep = []
+    for it in hist:
+        if not isinstance(it, dict):
+            continue
+        p = str(it.get("path", ""))
+        d = str(it.get("display", ""))
+        if p and d and os.path.exists(p):
+            keep.append({"display": d, "path": p})
+    keep = [it for it in keep if it["path"] != path]
+    keep.insert(0, {"display": display, "path": path})
+    st.session_state["_font_history"] = keep[:max_items]
+
+
 def get_default_font_path():
     medium = FONTS_DIR / "OPPOSans-Medium.ttf"
     if medium.exists():
@@ -1759,6 +1776,8 @@ if template_file and has_list:
     name_color = None
     company_layer = None
     name_layer = None
+    company_font_hint = None
+    name_font_hint = None
 
     if enable_company:
         mcol1, mcol2 = st.columns(2) if enable_name else [st.container(), None]
@@ -1772,6 +1791,7 @@ if template_file and has_list:
                 company_y = positions[company_layer][0]
                 company_fsize = positions[company_layer][1]
                 company_stroke = positions[company_layer][3]
+                company_font_hint = st.empty()
             else:
                 company_y = st.number_input("\u516c\u53f8\u540d Y \u5750\u6807", 0, img_height, int(img_height * 0.45))
 
@@ -1787,6 +1807,7 @@ if template_file and has_list:
                 name_y = positions[name_layer][0]
                 name_fsize = positions[name_layer][1]
                 name_stroke = positions[name_layer][3]
+                name_font_hint = st.empty()
             else:
                 name_y = st.number_input("\u4eba\u540d Y \u5750\u6807", 0, img_height, int(img_height * 0.48))
 
@@ -1838,12 +1859,23 @@ if template_file and has_list:
     if not mapping_ok:
         st.stop()
 
-    # ── font selection (with auto-match for PSD/PSB) ──
+    # ── font selection (system overhaul) ──
     st.markdown("### \u5b57\u4f53\u9009\u62e9")
 
     all_fonts = scan_fonts()
-    font_names = list(all_fonts.keys())
-    _fidx = build_local_font_index(all_fonts)
+    uploaded_entries = []
+    for it in st.session_state.get("_uploaded_font_entries", []):
+        p = str(it.get("path", ""))
+        d = str(it.get("display", ""))
+        if p and d and os.path.exists(p):
+            uploaded_entries.append({"display": d, "path": p})
+    st.session_state["_uploaded_font_entries"] = uploaded_entries
+    uploaded_fonts = {it["display"]: it["path"] for it in uploaded_entries}
+    merged_fonts = dict(all_fonts)
+    merged_fonts.update(uploaded_fonts)
+    merged_font_names = list(merged_fonts.keys())
+    _fidx = build_local_font_index(merged_fonts)
+
     psd_candidates = []
     psd_matched = []
     psd_unmatched = []
@@ -1859,21 +1891,13 @@ if template_file and has_list:
         if psd_candidates:
             with st.expander("\u6a21\u677f\u5185\u6807\u6ce8\u5b57\u4f53\uff08PSD \u7cbe\u786e\u8bc6\u522b\uff09", expanded=False):
                 if psd_matched:
-                    st.caption("\u5df2\u5339\u914d\u5230\u672c\u5730\u5b57\u4f53\uff1a")
-                    for _m in psd_matched[:12]:
+                    st.caption("\u5df2\u5339\u914d\u5230\u5b57\u4f53\uff1a")
+                    for _m in psd_matched[:20]:
                         st.text(f"  \u2022 {_m['psd'].get('raw') or _m['psd'].get('family')} \u2192 {_m['local']['display']}")
                 if psd_unmatched:
-                    st.caption("\u672a\u5339\u914d\u5230\u672c\u5730\u7684 PSD \u5b57\u4f53\uff1a")
-                    for _u in psd_unmatched[:12]:
+                    st.caption("\u672a\u5339\u914d\u5b57\u4f53\uff1a")
+                    for _u in psd_unmatched[:20]:
                         st.text(f"  \u2022 {_u.get('raw') or _u.get('family')}")
-                if not psd_unmatched and psd_matched:
-                    st.success("PSD \u5b57\u4f53\u672c\u5730\u5339\u914d\u5b8c\u6210")
-                if layer_font_map:
-                    st.caption("\u56fe\u5c42\u5b57\u4f53\u5bf9\u5e94\uff08\u591a\u5b57\u4f53\u5206\u5c42\u5e94\u7528\uff09\uff1a")
-                    for _lname, _psname in list(layer_font_map.items())[:20]:
-                        _tk = _normalize_font_token(_psname)
-                        _loc = _fidx.get(_tk, {}).get("display", "未匹配（回退默认）")
-                        st.text(f"  \u2022 {_lname} \u2192 {_loc}")
 
     _pref_path = st.session_state.get("_preferred_font_path")
     _pref_label = st.session_state.get("_preferred_font_label", "")
@@ -1881,94 +1905,121 @@ if template_file and has_list:
     _default_src = 2 if _has_pref else (1 if (is_psd and psd_recommended) else 0)
     font_source = st.radio(
         "\u5b57\u4f53\u6765\u6e90",
-        ["\u9ed8\u8ba4 OPPO \u5b57\u4f53", "\u7535\u8111\u672c\u5730\u5b57\u4f53", "\u4e0a\u4f20\u81ea\u5b9a\u4e49\u5b57\u4f53"],
+        ["\u9ed8\u8ba4\u5b57\u4f53", "\u672c\u673a\u5b57\u4f53", "\u4e0a\u4f20\u5b57\u4f53"],
         index=_default_src,
         horizontal=True,
         key="font_source_radio",
-        help="\u9009\u62e9\u5b57\u4f53\u6765\u6e90\uff1a\u9ed8\u8ba4\u5185\u7f6e\u3001\u670d\u52a1\u5668\u672c\u5730\u5b57\u4f53\u3001\u6216\u4e0a\u4f20 .ttf/.otf \u6587\u4ef6",
     )
-    custom_font_file = None
 
-    if font_source == "\u9ed8\u8ba4 OPPO \u5b57\u4f53":
-        _oppo_medium = FONTS_DIR / "OPPOSans-Medium.ttf"
-        _oppo4 = FONTS_DIR / "OPPOSans4.ttf"
-        _oppo_options = {}
-        if _oppo4.exists():
-            _oppo_options["OPPO Sans 4.0 (Regular)"] = str(_oppo4)
-        if _oppo_medium.exists():
-            _oppo_options["OPPO Sans (Medium)"] = str(_oppo_medium)
-        if _oppo_options:
-            if len(_oppo_options) > 1:
-                _oppo_choice = st.radio(
-                    "\u9009\u62e9 OPPO \u5b57\u4f53\u7248\u672c",
-                    list(_oppo_options.keys()),
-                    horizontal=True,
-                    key="oppo_font_choice",
-                )
-            else:
-                _oppo_choice = list(_oppo_options.keys())[0]
-            font_path = _oppo_options[_oppo_choice]
-            st.success(f"\u5df2\u4f7f\u7528\u9ed8\u8ba4\u5b57\u4f53 {_oppo_choice}")
-        else:
-            st.error("\u9ed8\u8ba4\u5b57\u4f53\u672a\u627e\u5230\uff0c\u8bf7\u5207\u6362\u5230\u300c\u4e0a\u4f20\u81ea\u5b9a\u4e49\u5b57\u4f53\u300d")
-            st.stop()
-    elif font_source == "\u7535\u8111\u672c\u5730\u5b57\u4f53":
-        if font_names:
-            default_idx = 0
-            if is_psd and psd_recommended and psd_recommended in font_names:
-                default_idx = font_names.index(psd_recommended)
-                st.info(f"\u5df2\u81ea\u52a8\u8bc6\u522b PSD \u5b57\u4f53\uff0c\u9ed8\u8ba4\u5339\u914d\u672c\u5730\u5b57\u4f53\uff1a{psd_recommended}")
-            else:
-                for i, name in enumerate(font_names):
-                    if "OPPO Sans 4.0" in name:
-                        default_idx = i
-                        break
-            selected_font = st.selectbox(
-                "\u7535\u8111\u672c\u5730\u5b57\u4f53\u9009\u62e9",
-                font_names,
-                index=default_idx,
-                help=f"\u5df2\u626b\u63cf\u5230 {len(font_names)} \u4e2a\u53ef\u7528\u5b57\u4f53",
-            )
-            font_path = all_fonts[selected_font]
-            st.session_state["_preferred_font_path"] = font_path
-            st.session_state["_preferred_font_label"] = selected_font
-        else:
-            st.warning("\u672a\u626b\u63cf\u5230\u672c\u5730\u5b57\u4f53\uff0c\u5df2\u56de\u9000\u5230\u9ed8\u8ba4\u5b57\u4f53")
-            font_path = get_default_font_path()
-            if not font_path:
-                st.error("\u672a\u627e\u5230\u4efb\u4f55\u53ef\u7528\u5b57\u4f53")
-                st.stop()
-    else:
-        custom_font_file = st.file_uploader(
-            "\u4e0a\u4f20 .ttf / .otf \u5b57\u4f53\u6587\u4ef6",
+    # fallback default font = OPPO 4.0 first
+    _oppo_medium = FONTS_DIR / "OPPOSans-Medium.ttf"
+    _oppo4 = FONTS_DIR / "OPPOSans4.ttf"
+    _fallback_font_path = str(_oppo4) if _oppo4.exists() else (str(_oppo_medium) if _oppo_medium.exists() else get_default_font_path())
+    _fallback_font_label = "OPPO Sans 4.0 (Regular)" if _oppo4.exists() else ("OPPO Sans (Medium)" if _oppo_medium.exists() else Path(_fallback_font_path).name)
+
+    # upload area (for upload mode and reuse by other modes)
+    uploaded_files = []
+    if font_source == "\u4e0a\u4f20\u5b57\u4f53":
+        uploaded_files = st.file_uploader(
+            "\u4e0a\u4f20\u5b57\u4f53\u6587\u4ef6\uff08\u53ef\u591a\u9009 .ttf/.otf\uff09",
             type=["ttf", "otf"],
-        )
-        if custom_font_file:
+            accept_multiple_files=True,
+            key="multi_font_uploader",
+        ) or []
+        if uploaded_files:
             _rt_dir = APP_DIR / ".runtime" / "uploaded-fonts"
             _rt_dir.mkdir(parents=True, exist_ok=True)
-            _dst = _rt_dir / f"active_custom_font{file_suffix(custom_font_file)}"
-            _dst.write_bytes(custom_font_file.getvalue())
-            font_path = str(_dst)
-            st.session_state["_custom_font_active"] = True
-            try:
-                family, style = ImageFont.truetype(font_path, 20).getname()
-                st.success(f"\u5df2\u52a0\u8f7d\u81ea\u5b9a\u4e49\u5b57\u4f53\uff1a{family} ({style})")
-                st.session_state["_preferred_font_path"] = font_path
-                st.session_state["_preferred_font_label"] = f"{family} ({style})"
-            except Exception as e:
-                st.error(f"\u5b57\u4f53\u6587\u4ef6\u65e0\u6cd5\u52a0\u8f7d: {e}")
-                font_path = get_default_font_path()
-        else:
-            if _has_pref:
-                font_path = str(_pref_path)
-                st.session_state["_custom_font_active"] = True
-                st.success(f"\u5df2\u81ea\u52a8\u5e94\u7528\u4e0a\u6b21\u4e0a\u4f20\u5b57\u4f53\uff1a{_pref_label or Path(str(_pref_path)).name}")
-            else:
-                st.session_state["_custom_font_active"] = False
-                st.info("\u8bf7\u4e0a\u4f20\u5b57\u4f53\u6587\u4ef6\uff0c\u6216\u5207\u6362\u5230\u5176\u4ed6\u5b57\u4f53\u6765\u6e90")
-                font_path = get_default_font_path()
+            for f in uploaded_files:
+                _dst = _rt_dir / f"{Path(f.name).stem}{file_suffix(f)}"
+                _dst.write_bytes(f.getvalue())
+                try:
+                    fam, sty = ImageFont.truetype(str(_dst), 20).getname()
+                    _disp = f"{fam} ({sty})"
+                except Exception:
+                    _disp = _dst.stem
+                if _disp not in merged_fonts:
+                    merged_fonts[_disp] = str(_dst)
+                push_font_history(_disp, str(_dst))
+            # refresh merged after upload
+            merged_font_names = list(merged_fonts.keys())
+            _fidx = build_local_font_index(merged_fonts)
+            st.session_state["_uploaded_font_entries"] = [
+                {"display": d, "path": p}
+                for d, p in merged_fonts.items()
+                if str(p).startswith(str(APP_DIR / ".runtime" / "uploaded-fonts")) and os.path.exists(p)
+            ]
 
-    if is_psd:
+    # font history
+    _hist = st.session_state.get("_font_history", [])
+    _hist = [h for h in _hist if isinstance(h, dict) and os.path.exists(str(h.get("path", "")))]
+    st.session_state["_font_history"] = _hist[:20]
+
+    if font_source == "\u9ed8\u8ba4\u5b57\u4f53":
+        if is_psd:
+            # per-layer auto match first, fallback to OPPO
+            per_layer_fonts = resolve_per_layer_font_path(layer_font_map, _fidx, _fallback_font_path)
+            font_path = _fallback_font_path
+            st.success("\u9ed8\u8ba4\u5b57\u4f53\u5df2\u81ea\u52a8\u6309 PSD \u56fe\u5c42\u5339\u914d\uff08\u672a\u5339\u914d\u56de\u9000 OPPO\uff09")
+        else:
+            font_path = _fallback_font_path
+            st.success(f"\u5df2\u4f7f\u7528\u9ed8\u8ba4\u5b57\u4f53 {_fallback_font_label}")
+        push_font_history(_fallback_font_label, font_path)
+        if _hist:
+            hist_labels = [f"{i+1}. {h.get('display','')}" for i, h in enumerate(_hist)]
+            _hidx = st.selectbox("\u8fc7\u5f80\u5b57\u4f53\u5217\u8868\uff08\u53ef\u8986\u76d6\u5f53\u524d\u9ed8\u8ba4\uff09", hist_labels, index=0)
+            _hi = int(_hidx.split(".", 1)[0]) - 1
+            if 0 <= _hi < len(_hist):
+                font_path = _hist[_hi]["path"]
+                st.caption(f"\u5df2\u4ece\u5386\u53f2\u5217\u8868\u9009\u62e9\uff1a{_hist[_hi]['display']}")
+    elif font_source == "\u672c\u673a\u5b57\u4f53":
+        local_names = list(all_fonts.keys())
+        if local_names:
+            default_idx = 0
+            if is_psd and psd_recommended and psd_recommended in local_names:
+                default_idx = local_names.index(psd_recommended)
+            elif "OPPO Sans 4.0 (Regular)" in local_names:
+                default_idx = local_names.index("OPPO Sans 4.0 (Regular)")
+            selected_font = st.selectbox(
+                "\u672c\u673a\u5b57\u4f53\u9009\u62e9",
+                local_names,
+                index=default_idx,
+                help=f"\u5df2\u626b\u63cf\u5230 {len(local_names)} \u4e2a\u672c\u673a\u5b57\u4f53",
+            )
+            font_path = all_fonts[selected_font]
+            if is_psd:
+                per_layer_fonts = {ln: font_path for ln in layer_font_map.keys()}
+            push_font_history(selected_font, font_path)
+        else:
+            font_path = _fallback_font_path
+            st.warning("\u672a\u626b\u63cf\u5230\u672c\u673a\u5b57\u4f53\uff0c\u5df2\u56de\u9000\u5230\u9ed8\u8ba4\u5b57\u4f53")
+    else:
+        uploaded_only = dict(uploaded_fonts)
+        # Include freshly uploaded fonts in current turn
+        for d, p in merged_fonts.items():
+            if str(p).startswith(str(APP_DIR / ".runtime" / "uploaded-fonts")):
+                uploaded_only[d] = p
+        if not uploaded_only:
+            st.info("\u8bf7\u4e0a\u4f20\u4e00\u4e2a\u6216\u591a\u4e2a .ttf/.otf \u5b57\u4f53\u6587\u4ef6")
+            font_path = _fallback_font_path
+        else:
+            up_names = list(uploaded_only.keys())
+            if is_psd:
+                _up_idx = build_local_font_index(uploaded_only)
+                per_layer_fonts = resolve_per_layer_font_path(layer_font_map, _up_idx, _fallback_font_path)
+                font_path = _fallback_font_path
+                st.success("\u5df2\u6309 PSD \u56fe\u5c42\u5c1d\u8bd5\u5339\u914d\u4e0a\u4f20\u5b57\u4f53\uff08\u672a\u5339\u914d\u56de\u9000\u9ed8\u8ba4\uff09")
+                for d, p in uploaded_only.items():
+                    push_font_history(d, p)
+            else:
+                _pick = st.selectbox("\u4e0a\u4f20\u5b57\u4f53\u9009\u62e9", up_names, index=0)
+                font_path = uploaded_only[_pick]
+                push_font_history(_pick, font_path)
+                st.success(f"\u5df2\u4f7f\u7528\u4e0a\u4f20\u5b57\u4f53\uff1a{_pick}")
+
+    # keep preferred keys for cross-rerun
+    st.session_state["_preferred_font_path"] = font_path
+    st.session_state["_preferred_font_label"] = Path(font_path).name if font_path else ""
+    if is_psd and not per_layer_fonts:
         per_layer_fonts = resolve_per_layer_font_path(layer_font_map, _fidx, font_path)
 
     # ── re-calibrate positions for the chosen font ──
@@ -1982,12 +2033,16 @@ if template_file and has_list:
             company_stroke = positions[company_layer][3]
             company_font_path = per_layer_fonts.get(company_layer, font_path)
             company_color = per_layer_colors.get(company_layer, font_color)
+            if company_font_hint is not None:
+                company_font_hint.caption(f"\u2192 \u5c06\u4f7f\u7528\u5b57\u4f53\uff1a{Path(company_font_path).stem}")
         if enable_name and name_layer and name_layer in positions:
             name_y = positions[name_layer][0]
             name_fsize = positions[name_layer][1]
             name_stroke = positions[name_layer][3]
             name_font_path = per_layer_fonts.get(name_layer, font_path)
             name_color = per_layer_colors.get(name_layer, font_color)
+            if name_font_hint is not None:
+                name_font_hint.caption(f"\u2192 \u5c06\u4f7f\u7528\u5b57\u4f53\uff1a{Path(name_font_path).stem}")
 
     # ── font weight ──
     auto_stroke = max(company_stroke, name_stroke)
