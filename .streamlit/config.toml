@@ -5,6 +5,9 @@ gatherUsageStats = false
 maxUploadSize = 2048
 maxMessageSize = 2048
 headless = true
+enableXsrfProtection = false
+enableCORS = false
+enableWebsocketCompression = false
 
 [theme]
 primaryColor = "#0071e3"
