@@ -377,6 +377,35 @@ def match_psd_fonts_to_local(psd_fonts, local_index):
     return matched, unmatched, recommended
 
 
+def extract_per_layer_font(psd):
+    """Return {layer_name: psd_font_name} for PSD text layers."""
+    out = {}
+    for tl in psd.descendants():
+        if tl.kind != "type":
+            continue
+        try:
+            ss = tl.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
+            fs = tl.engine_dict.get("ResourceDict", {}).get("FontSet", [])
+            fi = int(ss.get("Font", 0))
+            if fi < len(fs):
+                out[tl.name] = str(fs[fi].get("Name", "")).strip()
+        except Exception:
+            continue
+    return out
+
+
+def resolve_per_layer_font_path(layer_font_map, local_index, fallback_path):
+    """Resolve each layer font to a local font path with fallback."""
+    resolved = {}
+    for layer_name, ps_name in (layer_font_map or {}).items():
+        token = _normalize_font_token(ps_name)
+        if token and token in local_index:
+            resolved[layer_name] = local_index[token]["path"]
+        else:
+            resolved[layer_name] = fallback_path
+    return resolved
+
+
 def get_default_font_path():
     medium = FONTS_DIR / "OPPOSans-Medium.ttf"
     if medium.exists():
@@ -566,7 +595,7 @@ def get_font_color(psd):
     return (255, 255, 255, 255)
 
 
-def get_text_layer_positions(psd, font_path=None):
+def get_text_layer_positions(psd, font_path=None, per_layer_fonts=None):
     """Return {layer_name: (center_y, calibrated_font_size, psd_width, stroke_width)}.
 
     stroke_width is derived from PSD FauxBold flag or bold font variant name,
@@ -579,8 +608,9 @@ def get_text_layer_positions(psd, font_path=None):
             ss = l.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
             raw_size = ss.get("FontSize", 51)
             cal_size = int(raw_size)
-            if font_path and l.height > 0 and len(l.text) >= 1:
-                cal_size = calibrate_font_size(font_path, l.text, l.height, raw_size)
+            layer_font_path = (per_layer_fonts or {}).get(l.name, font_path)
+            if layer_font_path and l.height > 0 and len(l.text) >= 1:
+                cal_size = calibrate_font_size(layer_font_path, l.text, l.height, raw_size)
 
             stroke_w = 0
             faux_bold = ss.get("FauxBold", False)
@@ -807,8 +837,9 @@ def generate_one(background, text_items, img_width, color, font_path):
     for item in text_items:
         text, cy, fsize = item[0], item[1], item[2]
         sw = item[3] if len(item) > 3 else 0
+        item_font_path = item[4] if len(item) > 4 and item[4] else font_path
         if text:
-            f = ImageFont.truetype(font_path, fsize)
+            f = ImageFont.truetype(item_font_path, fsize)
             draw_centered_text(draw, f, text, cy, img_width, color,
                                stroke_width=sw, target_img=img)
     return img
@@ -1478,10 +1509,9 @@ if template_file and has_list:
     with m3:
         if qr_box:
             st.metric("二维码状态", "已检测")
-        else:
+        elif qr_file:
             st.metric("二维码状态", "未检测到")
-            if qr_file:
-                st.warning("已上传替换二维码但模板中未检测到二维码区域。请确认 PSD 图层名称包含「二维码」「QR」「扫码」等关键词。")
+            st.warning("已上传替换二维码但模板中未检测到二维码区域。请确认 PSD 图层名称包含「二维码」「QR」「扫码」等关键词。")
 
     # ── auto-detect fields ──
     COMPANY_KEYWORDS = ["company", "\u516c\u53f8", "\u5355\u4f4d", "\u673a\u6784", "\u4f01\u4e1a", "\u7ec4\u7ec7"]
@@ -1537,6 +1567,8 @@ if template_file and has_list:
     name_y = 0
     name_fsize = font_size
     name_stroke = 0
+    company_font_path = None
+    name_font_path = None
     company_layer = None
     name_layer = None
 
@@ -1623,14 +1655,17 @@ if template_file and has_list:
 
     all_fonts = scan_fonts()
     font_names = list(all_fonts.keys())
+    _fidx = build_local_font_index(all_fonts)
     psd_candidates = []
     psd_matched = []
     psd_unmatched = []
     psd_recommended = None
+    layer_font_map = {}
+    per_layer_fonts = {}
     if is_psd:
         psd_candidates = extract_psd_font_candidates(psd)
-        _fidx = build_local_font_index(all_fonts)
         psd_matched, psd_unmatched, psd_recommended = match_psd_fonts_to_local(psd_candidates, _fidx)
+        layer_font_map = extract_per_layer_font(psd)
         if psd_candidates:
             with st.expander("\u6a21\u677f\u5185\u6807\u6ce8\u5b57\u4f53\uff08PSD \u7cbe\u786e\u8bc6\u522b\uff09", expanded=False):
                 if psd_matched:
@@ -1643,6 +1678,12 @@ if template_file and has_list:
                         st.text(f"  \u2022 {_u.get('raw') or _u.get('family')}")
                 if not psd_unmatched and psd_matched:
                     st.success("PSD \u5b57\u4f53\u672c\u5730\u5339\u914d\u5b8c\u6210")
+                if layer_font_map:
+                    st.caption("\u56fe\u5c42\u5b57\u4f53\u5bf9\u5e94\uff08\u591a\u5b57\u4f53\u5206\u5c42\u5e94\u7528\uff09\uff1a")
+                    for _lname, _psname in list(layer_font_map.items())[:20]:
+                        _tk = _normalize_font_token(_psname)
+                        _loc = _fidx.get(_tk, {}).get("display", "未匹配（回退默认）")
+                        st.text(f"  \u2022 {_lname} \u2192 {_loc}")
 
     _pref_path = st.session_state.get("_preferred_font_path")
     _pref_label = st.session_state.get("_preferred_font_label", "")
@@ -1737,19 +1778,24 @@ if template_file and has_list:
                 st.info("\u8bf7\u4e0a\u4f20\u5b57\u4f53\u6587\u4ef6\uff0c\u6216\u5207\u6362\u5230\u5176\u4ed6\u5b57\u4f53\u6765\u6e90")
                 font_path = get_default_font_path()
 
+    if is_psd:
+        per_layer_fonts = resolve_per_layer_font_path(layer_font_map, _fidx, font_path)
+
     # ── re-calibrate positions for the chosen font ──
     if is_psd and font_path:
-        positions = get_text_layer_positions(psd, font_path)
+        positions = get_text_layer_positions(psd, font_path, per_layer_fonts=per_layer_fonts)
         positions = calibrate_stroke_weights(
             psd, positions, original_img, bg, font_path, font_color, img_width)
         if enable_company and company_layer and company_layer in positions:
             company_y = positions[company_layer][0]
             company_fsize = positions[company_layer][1]
             company_stroke = positions[company_layer][3]
+            company_font_path = per_layer_fonts.get(company_layer, font_path)
         if enable_name and name_layer and name_layer in positions:
             name_y = positions[name_layer][0]
             name_fsize = positions[name_layer][1]
             name_stroke = positions[name_layer][3]
+            name_font_path = per_layer_fonts.get(name_layer, font_path)
 
     # ── font weight ──
     auto_stroke = max(company_stroke, name_stroke)
@@ -1839,9 +1885,9 @@ if template_file and has_list:
     def build_text_items(row):
         items = []
         if enable_company and company_field:
-            items.append((row[company_field], company_y, company_fsize, company_stroke))
+            items.append((row[company_field], company_y, company_fsize, company_stroke, company_font_path or font_path))
         if enable_name and name_field:
-            items.append((row[name_field], name_y, name_fsize, name_stroke))
+            items.append((row[name_field], name_y, name_fsize, name_stroke, name_font_path or font_path))
         return items
 
     def build_filename(row):
