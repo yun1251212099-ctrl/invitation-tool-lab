@@ -1,5 +1,6 @@
 .DS_Store
 __pycache__/
+.venv/
 *.pyc
 .ngrok_domain
 启动工具.command
@@ -9,3 +10,6 @@ invite_list.csv
 需要替换的二维码.png
 匹配示意图.png
 邀请函批量调整说明.md
+.streamlit_home/
+cloudflared/config.local.yml
+cloudflared/*.json
