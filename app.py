@@ -403,14 +403,40 @@ def extract_per_layer_font(psd):
 
 
 def resolve_per_layer_font_path(layer_font_map, local_index, fallback_path):
-    """Resolve each layer font to a local font path with fallback."""
+    """Resolve each layer font to a local font path with fallback.
+
+    Matching order:
+    1) strict token match (_normalize_font_token)
+    2) fuzzy substring match (uploaded/local font stem appears in PSD font name)
+    """
     resolved = {}
+    # build fuzzy stems from local_index values (display/path)
+    stems = []
+    for v in (local_index or {}).values():
+        p = str(v.get("path", ""))
+        if not p:
+            continue
+        stems.append(_normalize_font_token(Path(p).stem))
+    stems = [s for s in dict.fromkeys(stems) if s]
+
     for layer_name, ps_name in (layer_font_map or {}).items():
         token = _normalize_font_token(ps_name)
-        if token and token in local_index:
-            resolved[layer_name] = local_index[token]["path"]
+        pick = None
+        if token and token in (local_index or {}):
+            pick = local_index[token]["path"]
         else:
-            resolved[layer_name] = fallback_path
+            # fuzzy: find any stem contained in PSD token
+            for stoken in stems:
+                if stoken and token and (stoken in token or token in stoken):
+                    # find first matching path for this stem
+                    for v in (local_index or {}).values():
+                        p = str(v.get("path", ""))
+                        if p and _normalize_font_token(Path(p).stem) == stoken:
+                            pick = p
+                            break
+                    if pick:
+                        break
+        resolved[layer_name] = pick or fallback_path
     return resolved
 
 
@@ -1975,8 +2001,14 @@ if template_file and has_list:
         if is_psd:
             per_layer_fonts = resolve_per_layer_font_path(layer_font_map, _fidx, _fallback_font_path)
             font_path = _fallback_font_path
+            _missing = []
+            for _lname, _psname in layer_font_map.items():
+                if per_layer_fonts.get(_lname) == _fallback_font_path:
+                    _missing.append((_lname, _psname))
             st.success("\u9ed8\u8ba4\u5b57\u4f53\u5df2\u81ea\u52a8\u6309 PSD \u56fe\u5c42\u5339\u914d")
             _show_layer_font_detail(per_layer_fonts, layer_font_map, _fallback_font_label)
+            if _missing:
+                st.warning("\u5b58\u5728\u6a21\u677f\u5b57\u4f53\u672a\u5728\u5f53\u524d\u73af\u5883\u627e\u5230\uff0c\u53ef\u5207\u6362\u5230\u300c\u4e0a\u4f20\u5b57\u4f53\u300d\u4e0a\u4f20\u5bf9\u5e94\u5b57\u4f53\u6587\u4ef6\u4ee5\u7cbe\u51c6\u5339\u914d\u3002")
         else:
             font_path = _fallback_font_path
             st.success(f"\u5df2\u4f7f\u7528\u9ed8\u8ba4\u5b57\u4f53 {_fallback_font_label}")
@@ -2024,8 +2056,27 @@ if template_file and has_list:
                 _up_idx = build_local_font_index(uploaded_only)
                 per_layer_fonts = resolve_per_layer_font_path(layer_font_map, _up_idx, _fallback_font_path)
                 font_path = _fallback_font_path
-                st.success("\u5df2\u6309 PSD \u56fe\u5c42\u5339\u914d\u4e0a\u4f20\u5b57\u4f53")
+                _all_fallback = True
+                for _ln in layer_font_map.keys():
+                    if per_layer_fonts.get(_ln) and per_layer_fonts.get(_ln) != _fallback_font_path:
+                        _all_fallback = False
+                        break
+                # If user uploaded a single font but nothing matched, force apply globally.
+                if _all_fallback and len(uploaded_only) == 1:
+                    _single_disp = up_names[0]
+                    _single_path = uploaded_only[_single_disp]
+                    per_layer_fonts = {ln: _single_path for ln in layer_font_map.keys()}
+                    font_path = _single_path
+                    st.success("\u5df2\u4e0a\u4f20 1 \u4e2a\u5b57\u4f53\uff0c\u6a21\u677f\u6e90\u5b57\u4f53\u540d\u4e0e\u6587\u4ef6\u540d\u4e0d\u4e00\u81f4\uff0c\u5df2\u76f4\u63a5\u5168\u5c40\u5e94\u7528\u8be5\u5b57\u4f53\u751f\u6210\u3002")
+                else:
+                    st.success("\u5df2\u6309 PSD \u56fe\u5c42\u5339\u914d\u4e0a\u4f20\u5b57\u4f53")
                 _show_layer_font_detail(per_layer_fonts, layer_font_map, _fallback_font_label)
+                _missing2 = []
+                for _lname, _psname in layer_font_map.items():
+                    if per_layer_fonts.get(_lname) == _fallback_font_path:
+                        _missing2.append((_lname, _psname))
+                if _missing2 and not (_all_fallback and len(uploaded_only) == 1):
+                    st.warning("\u90e8\u5206\u56fe\u5c42\u5b57\u4f53\u4ecd\u672a\u5339\u914d\uff0c\u5982\u9700 1:1 \u8fd8\u539f\uff0c\u8bf7\u7ee7\u7eed\u4e0a\u4f20\u7f3a\u5931\u5b57\u4f53\u6587\u4ef6\u3002")
                 for d, p in uploaded_only.items():
                     push_font_history(d, p)
             else:

@@ -13,3 +13,5 @@ invite_list.csv
 .streamlit_home/
 cloudflared/config.local.yml
 cloudflared/*.json
+.runtime/
+.runtime/uploaded-fonts/
