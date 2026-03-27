@@ -270,20 +270,19 @@ LIST_EXTENSIONS = ["csv", "xlsx", "xls"]
 # ── helpers ──────────────────────────────────────────────
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def scan_fonts():
-    """Scan bundled fonts dir (recursive) + common system font dirs."""
+    """Scan bundled fonts dir + system dirs. Returns {display: path}.
+    Also populates _PS_NAME_CACHE so build_local_font_index doesn't re-read files."""
     def _is_garbled_text(s: str) -> bool:
         s = str(s or "")
         if not s.strip():
             return True
-        bad = 0
-        for ch in s:
-            if ch == "?" or ch == "\ufffd" or ord(ch) < 32:
-                bad += 1
+        bad = sum(1 for ch in s if ch == "?" or ch == "\ufffd" or ord(ch) < 32)
         return bad / max(1, len(s)) > 0.3
 
     fonts = {}
+    ps_cache = {}
     search_roots = [str(FONTS_DIR)]
     for sys_dir in ["/System/Library/Fonts", "/System/Library/Fonts/Supplemental",
                     "/Library/Fonts", os.path.expanduser("~/Library/Fonts"),
@@ -306,9 +305,10 @@ def scan_fonts():
                     else:
                         display = f"{family} ({style})"
                     fonts[display] = path
+                    ps_cache[path] = (family, style)
                 except Exception:
                     pass
-    return dict(sorted(fonts.items()))
+    return dict(sorted(fonts.items())), ps_cache
 
 
 def _normalize_font_token(name: str) -> str:
@@ -357,8 +357,10 @@ def extract_psd_font_candidates(psd):
     return out
 
 
-def build_local_font_index(fonts_dict):
-    """Build strict token->font-display/path index from scan_fonts()."""
+def build_local_font_index(fonts_dict, ps_cache=None):
+    """Build strict token->font-display/path index.
+    ps_cache: {path: (family, style)} from scan_fonts() to avoid re-reading files.
+    """
     index = {}
     for display, path in (fonts_dict or {}).items():
         family = display
@@ -372,15 +374,22 @@ def build_local_font_index(fonts_dict):
             _normalize_font_token(f"{family} {style}"),
             _normalize_font_token(Path(path).stem),
         }
-        # Include PostScript/family names read from the real font file.
-        try:
-            ps_family, ps_style = ImageFont.truetype(str(path), 20).getname()
+        ps_info = (ps_cache or {}).get(path)
+        if ps_info:
+            ps_family, ps_style = ps_info
             tokens.update({
                 _normalize_font_token(ps_family),
                 _normalize_font_token(f"{ps_family} {ps_style}"),
             })
-        except Exception:
-            pass
+        else:
+            try:
+                ps_family, ps_style = ImageFont.truetype(str(path), 20).getname()
+                tokens.update({
+                    _normalize_font_token(ps_family),
+                    _normalize_font_token(f"{ps_family} {ps_style}"),
+                })
+            except Exception:
+                pass
         for tk in [t for t in tokens if t]:
             if tk not in index:
                 index[tk] = {"display": display, "path": path}
@@ -482,7 +491,7 @@ def get_default_font_path():
     bundled = FONTS_DIR / "OPPOSans4.ttf"
     if bundled.exists():
         return str(bundled)
-    fonts = scan_fonts()
+    fonts, _ = scan_fonts()
     if fonts:
         return next(iter(fonts.values()))
     return None
@@ -829,12 +838,7 @@ def draw_centered_text(draw, font, text, center_y, img_width, color, stroke_widt
             return
         bbox = font.getbbox(render_text)
         text_w = bbox[2] - bbox[0]
-        if align == "right":
-            x = img_width - text_w - 20
-        elif align == "left":
-            x = 20
-        else:
-            x = (img_width - text_w) // 2
+        x = (img_width - text_w) // 2 if align == "center" else max(0, (img_width - text_w) // 2)
         y = center_y - (bbox[1] + bbox[3]) // 2
         if stroke_width > 0:
             draw.text((x, y), render_text, font=font, fill=color,
@@ -1928,7 +1932,7 @@ if template_file and has_list:
     # ── font selection (system overhaul) ──
     st.markdown("### \u5b57\u4f53\u9009\u62e9")
 
-    all_fonts = scan_fonts()
+    all_fonts, _ps_name_cache = scan_fonts()
     uploaded_entries = []
     for it in st.session_state.get("_uploaded_font_entries", []):
         p = str(it.get("path", ""))
@@ -1940,7 +1944,7 @@ if template_file and has_list:
     merged_fonts = dict(all_fonts)
     merged_fonts.update(uploaded_fonts)
     merged_font_names = list(merged_fonts.keys())
-    _fidx = build_local_font_index(merged_fonts)
+    _fidx = build_local_font_index(merged_fonts, _ps_name_cache)
 
     psd_candidates = []
     psd_matched = []
@@ -2008,7 +2012,7 @@ if template_file and has_list:
                 push_font_history(_disp, str(_dst))
             # refresh merged after upload
             merged_font_names = list(merged_fonts.keys())
-            _fidx = build_local_font_index(merged_fonts)
+            _fidx = build_local_font_index(merged_fonts, _ps_name_cache)
             st.session_state["_uploaded_font_entries"] = [
                 {"display": d, "path": p}
                 for d, p in merged_fonts.items()
@@ -2100,7 +2104,7 @@ if template_file and has_list:
         else:
             up_names = list(uploaded_only.keys())
             if is_psd:
-                _up_idx = build_local_font_index(uploaded_only)
+                _up_idx = build_local_font_index(uploaded_only, _ps_name_cache)
                 per_layer_fonts = resolve_per_layer_font_path(layer_font_map, _up_idx, _fallback_font_path)
                 font_path = _fallback_font_path
                 _all_fallback = True
