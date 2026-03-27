@@ -695,8 +695,10 @@ def extract_per_layer_color(psd):
 def get_text_layer_positions(psd, font_path=None, per_layer_fonts=None):
     """Return {layer_name: (center_y, calibrated_font_size, psd_width, stroke_width, center_x, align)}.
 
-    center_x: horizontal center of the PSD text layer.
-    align: 'center' if layer center is near image center, else 'left'.
+    align is determined by reading the PSD paragraph justification property.
+    Default is always 'center' unless the source file explicitly specifies
+    left/right alignment (Justification != 2).
+    PSD Justification values: 0=left, 1=right, 2=center, 3=justify-all.
     """
     img_w = psd.width
     positions = {}
@@ -704,8 +706,17 @@ def get_text_layer_positions(psd, font_path=None, per_layer_fonts=None):
         if l.kind == "type":
             cy = (l.top + l.bottom) // 2
             cx = (l.left + l.right) // 2
-            layer_cx_ratio = abs(cx - img_w / 2) / max(1, img_w)
-            align = "center" if layer_cx_ratio < 0.05 else "left"
+            align = "center"
+            try:
+                para = l.engine_dict.get("ParagraphRun", {}).get("RunArray", [{}])[0]
+                para_ss = para.get("ParagraphSheet", {}).get("Properties", {})
+                justification = int(para_ss.get("Justification", 2))
+                if justification == 0:
+                    align = "left"
+                elif justification == 1:
+                    align = "right"
+            except Exception:
+                pass
             ss = l.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
             raw_size = ss.get("FontSize", 51)
             cal_size = int(raw_size)
@@ -829,7 +840,12 @@ def draw_centered_text(draw, font, text, center_y, img_width, color, stroke_widt
             return
         bbox = font.getbbox(render_text)
         text_w = bbox[2] - bbox[0]
-        x = (img_width - text_w) // 2 if align == "center" else max(0, (img_width - text_w) // 2)
+        if align == "right":
+            x = img_width - text_w - 20
+        elif align == "left":
+            x = 20
+        else:
+            x = (img_width - text_w) // 2
         y = center_y - (bbox[1] + bbox[3]) // 2
         if stroke_width > 0:
             draw.text((x, y), render_text, font=font, fill=color,
