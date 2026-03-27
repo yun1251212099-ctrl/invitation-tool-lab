@@ -693,15 +693,19 @@ def extract_per_layer_color(psd):
 
 
 def get_text_layer_positions(psd, font_path=None, per_layer_fonts=None):
-    """Return {layer_name: (center_y, calibrated_font_size, psd_width, stroke_width)}.
+    """Return {layer_name: (center_y, calibrated_font_size, psd_width, stroke_width, center_x, align)}.
 
-    stroke_width is derived from PSD FauxBold flag or bold font variant name,
-    simulating Photoshop's bold rendering in Pillow via stroke.
+    center_x: horizontal center of the PSD text layer.
+    align: 'center' if layer center is near image center, else 'left'.
     """
+    img_w = psd.width
     positions = {}
     for l in psd.descendants():
         if l.kind == "type":
             cy = (l.top + l.bottom) // 2
+            cx = (l.left + l.right) // 2
+            layer_cx_ratio = abs(cx - img_w / 2) / max(1, img_w)
+            align = "center" if layer_cx_ratio < 0.05 else "left"
             ss = l.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
             raw_size = ss.get("FontSize", 51)
             cal_size = int(raw_size)
@@ -739,7 +743,7 @@ def get_text_layer_positions(psd, font_path=None, per_layer_fonts=None):
                 except Exception:
                     pass
 
-            positions[l.name] = (cy, cal_size, l.width, stroke_w)
+            positions[l.name] = (cy, cal_size, l.width, stroke_w, cx, align)
     return positions
 
 
@@ -794,13 +798,15 @@ def calibrate_stroke_weights(psd, positions, original_img, bg, font_path, color,
     updated = {}
     for l in psd.descendants():
         if l.kind == "type" and l.name in positions:
-            cy, cal_size, lw, old_sw = positions[l.name]
+            pos = positions[l.name]
+            cy, cal_size, lw, old_sw = pos[0], pos[1], pos[2], pos[3]
+            extra = pos[4:] if len(pos) > 4 else ()
             try:
                 sw = _calibrate_single_stroke(
                     l, original_img, bg, font_path, cal_size, color, img_width, cy)
             except Exception:
                 sw = old_sw
-            updated[l.name] = (cy, cal_size, lw, sw)
+            updated[l.name] = (cy, cal_size, lw, sw) + extra
 
     for k in positions:
         if k not in updated:
@@ -808,8 +814,8 @@ def calibrate_stroke_weights(psd, positions, original_img, bg, font_path, color,
     return updated
 
 
-def draw_centered_text(draw, font, text, center_y, img_width, color, stroke_width=0, target_img=None):
-    """Draw text centered, with emoji fallback to system color emoji font."""
+def draw_centered_text(draw, font, text, center_y, img_width, color, stroke_width=0, target_img=None, align="center"):
+    """Draw text (centered or left-aligned) with emoji fallback."""
     if not text or not text.strip():
         return
 
@@ -823,7 +829,7 @@ def draw_centered_text(draw, font, text, center_y, img_width, color, stroke_widt
             return
         bbox = font.getbbox(render_text)
         text_w = bbox[2] - bbox[0]
-        x = (img_width - text_w) // 2
+        x = (img_width - text_w) // 2 if align == "center" else max(0, (img_width - text_w) // 2)
         y = center_y - (bbox[1] + bbox[3]) // 2
         if stroke_width > 0:
             draw.text((x, y), render_text, font=font, fill=color,
@@ -928,7 +934,7 @@ def _compute_ssim(img_a, img_b):
 
 
 def generate_one(background, text_items, img_width, color, font_path):
-    """text_items: list of (text, cy, fsize[, stroke_w[, font_path[, color]]])."""
+    """text_items: list of (text, cy, fsize[, stroke_w[, font_path[, color[, align]]]])."""
     img = background.copy()
     draw = ImageDraw.Draw(img)
     for item in text_items:
@@ -936,10 +942,11 @@ def generate_one(background, text_items, img_width, color, font_path):
         sw = item[3] if len(item) > 3 else 0
         item_font_path = item[4] if len(item) > 4 and item[4] else font_path
         item_color = item[5] if len(item) > 5 and item[5] else color
+        item_align = item[6] if len(item) > 6 else "center"
         if text:
             f = ImageFont.truetype(item_font_path, fsize)
             draw_centered_text(draw, f, text, cy, img_width, item_color,
-                               stroke_width=sw, target_img=img)
+                               stroke_width=sw, target_img=img, align=item_align)
     return img
 
 
@@ -1816,10 +1823,12 @@ if template_file and has_list:
     company_y = 0
     company_fsize = font_size
     company_stroke = 0
+    company_align = "center"
     name_field = None
     name_y = 0
     name_fsize = font_size
     name_stroke = 0
+    name_align = "center"
     company_font_path = None
     name_font_path = None
     company_color = None
@@ -1841,6 +1850,7 @@ if template_file and has_list:
                 company_y = positions[company_layer][0]
                 company_fsize = positions[company_layer][1]
                 company_stroke = positions[company_layer][3]
+                company_align = positions[company_layer][5] if len(positions[company_layer]) > 5 else "center"
                 company_font_hint = st.empty()
             else:
                 company_y = st.number_input("\u516c\u53f8\u540d Y \u5750\u6807", 0, img_height, int(img_height * 0.45))
@@ -1857,6 +1867,7 @@ if template_file and has_list:
                 name_y = positions[name_layer][0]
                 name_fsize = positions[name_layer][1]
                 name_stroke = positions[name_layer][3]
+                name_align = positions[name_layer][5] if len(positions[name_layer]) > 5 else "center"
                 name_font_hint = st.empty()
             else:
                 name_y = st.number_input("\u4eba\u540d Y \u5750\u6807", 0, img_height, int(img_height * 0.48))
@@ -2044,16 +2055,26 @@ if template_file and has_list:
     elif font_source == "\u672c\u673a\u5b57\u4f53":
         local_names = list(all_fonts.keys())
         if local_names:
+            _font_query = st.text_input("\u641c\u7d22\u5b57\u4f53\uff08\u4e2d/\u82f1\u6587\uff09", "", key="font_search_input",
+                                        placeholder="\u8f93\u5165\u5173\u952e\u8bcd\u8fc7\u6ee4\uff0c\u5982 PingFang\u3001\u82f9\u65b9\u3001OPPO\u3001\u5b8b\u4f53...")
+            if _font_query.strip():
+                _q = _font_query.strip().lower()
+                filtered_names = [n for n in local_names if _q in n.lower() or _q in Path(all_fonts[n]).stem.lower()]
+            else:
+                filtered_names = local_names
+            if not filtered_names:
+                st.caption(f"\u672a\u627e\u5230\u5305\u542b\u300c{_font_query}\u300d\u7684\u5b57\u4f53\uff0c\u663e\u793a\u5168\u90e8 {len(local_names)} \u4e2a")
+                filtered_names = local_names
             default_idx = 0
-            if is_psd and psd_recommended and psd_recommended in local_names:
-                default_idx = local_names.index(psd_recommended)
-            elif "OPPO Sans 4.0 (Regular)" in local_names:
-                default_idx = local_names.index("OPPO Sans 4.0 (Regular)")
+            if is_psd and psd_recommended and psd_recommended in filtered_names:
+                default_idx = filtered_names.index(psd_recommended)
+            elif "OPPO Sans 4.0 (Regular)" in filtered_names:
+                default_idx = filtered_names.index("OPPO Sans 4.0 (Regular)")
             selected_font = st.selectbox(
                 "\u672c\u673a\u5b57\u4f53\u9009\u62e9",
-                local_names,
+                filtered_names,
                 index=default_idx,
-                help=f"\u5df2\u626b\u63cf\u5230 {len(local_names)} \u4e2a\u672c\u673a\u5b57\u4f53",
+                help=f"\u5df2\u626b\u63cf\u5230 {len(local_names)} \u4e2a\u672c\u673a\u5b57\u4f53\uff08\u5f53\u524d\u663e\u793a {len(filtered_names)} \u4e2a\uff09",
             )
             font_path = all_fonts[selected_font]
             if is_psd:
@@ -2130,6 +2151,7 @@ if template_file and has_list:
             company_y = positions[company_layer][0]
             company_fsize = positions[company_layer][1]
             company_stroke = positions[company_layer][3]
+            company_align = positions[company_layer][5] if len(positions[company_layer]) > 5 else "center"
             company_font_path = per_layer_fonts.get(company_layer, font_path)
             company_color = per_layer_colors.get(company_layer, font_color)
             if company_font_hint is not None:
@@ -2138,6 +2160,7 @@ if template_file and has_list:
             name_y = positions[name_layer][0]
             name_fsize = positions[name_layer][1]
             name_stroke = positions[name_layer][3]
+            name_align = positions[name_layer][5] if len(positions[name_layer]) > 5 else "center"
             name_font_path = per_layer_fonts.get(name_layer, font_path)
             name_color = per_layer_colors.get(name_layer, font_color)
             if name_font_hint is not None:
@@ -2231,9 +2254,9 @@ if template_file and has_list:
     def build_text_items(row):
         items = []
         if enable_company and company_field:
-            items.append((row[company_field], company_y, company_fsize, company_stroke, company_font_path or font_path, company_color or font_color))
+            items.append((row[company_field], company_y, company_fsize, company_stroke, company_font_path or font_path, company_color or font_color, company_align))
         if enable_name and name_field:
-            items.append((row[name_field], name_y, name_fsize, name_stroke, name_font_path or font_path, name_color or font_color))
+            items.append((row[name_field], name_y, name_fsize, name_stroke, name_font_path or font_path, name_color or font_color, name_align))
         return items
 
     def build_filename(row):
