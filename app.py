@@ -270,9 +270,19 @@ LIST_EXTENSIONS = ["csv", "xlsx", "xls"]
 # ── helpers ──────────────────────────────────────────────
 
 
-@st.cache_data
+@st.cache_data(ttl=60)
 def scan_fonts():
     """Scan bundled fonts dir (recursive) + common system font dirs."""
+    def _is_garbled_text(s: str) -> bool:
+        s = str(s or "")
+        if not s.strip():
+            return True
+        bad = 0
+        for ch in s:
+            if ch == "?" or ch == "\ufffd" or ord(ch) < 32:
+                bad += 1
+        return bad / max(1, len(s)) > 0.3
+
     fonts = {}
     search_roots = [str(FONTS_DIR)]
     for sys_dir in ["/System/Library/Fonts", "/System/Library/Fonts/Supplemental",
@@ -290,10 +300,9 @@ def scan_fonts():
                 try:
                     font_obj = ImageFont.truetype(path, 20)
                     family, style = font_obj.getname()
-                    has_garble = "?" in family or "\ufffd" in family
-                    if has_garble:
-                        stem = Path(f).stem
-                        display = f"{stem} ({style})" if style and "?" not in style else stem
+                    stem = Path(f).stem
+                    if _is_garbled_text(family):
+                        display = f"{stem} ({style})" if style and not _is_garbled_text(style) else stem
                     else:
                         display = f"{family} ({style})"
                     fonts[display] = path
@@ -363,6 +372,15 @@ def build_local_font_index(fonts_dict):
             _normalize_font_token(f"{family} {style}"),
             _normalize_font_token(Path(path).stem),
         }
+        # Include PostScript/family names read from the real font file.
+        try:
+            ps_family, ps_style = ImageFont.truetype(str(path), 20).getname()
+            tokens.update({
+                _normalize_font_token(ps_family),
+                _normalize_font_token(f"{ps_family} {ps_style}"),
+            })
+        except Exception:
+            pass
         for tk in [t for t in tokens if t]:
             if tk not in index:
                 index[tk] = {"display": display, "path": path}
@@ -1990,12 +2008,15 @@ if template_file and has_list:
         """Display per-layer font assignment detail."""
         if not plf or not lfm:
             return
+        st.markdown("\u6e90\u6587\u4ef6\u5b57\u4f53\u8bc6\u522b\u7ed3\u679c\uff1a")
         for lname, psname in lfm.items():
             fpath = plf.get(lname, "")
             fname = Path(fpath).stem if fpath else fallback_label
             is_fallback = (fpath == _fallback_font_path) or not fpath
-            tag = "\uff08\u56de\u9000\u9ed8\u8ba4\uff09" if is_fallback else "\uff08\u5339\u914d\u6210\u529f\uff09"
-            st.caption(f"  \u2022 \u56fe\u5c42\u300c{lname}\u300d\u6e90\u6587\u4ef6\u5b57\u4f53: {psname} \u2192 {fname} {tag}")
+            if is_fallback:
+                st.warning(f"\u56fe\u5c42\u300c{lname}\u300d: {psname} -> {fname}\uff08\u672a\u5339\u914d\uff0c\u5df2\u56de\u9000\u9ed8\u8ba4\u5b57\u4f53\uff09")
+            else:
+                st.info(f"\u56fe\u5c42\u300c{lname}\u300d: {psname} -> {fname}\uff08\u5339\u914d\u6210\u529f\uff09")
 
     if font_source == "\u9ed8\u8ba4\u5b57\u4f53":
         if is_psd:
@@ -2077,6 +2098,15 @@ if template_file and has_list:
                         _missing2.append((_lname, _psname))
                 if _missing2 and not (_all_fallback and len(uploaded_only) == 1):
                     st.warning("\u90e8\u5206\u56fe\u5c42\u5b57\u4f53\u4ecd\u672a\u5339\u914d\uff0c\u5982\u9700 1:1 \u8fd8\u539f\uff0c\u8bf7\u7ee7\u7eed\u4e0a\u4f20\u7f3a\u5931\u5b57\u4f53\u6587\u4ef6\u3002")
+                _upload_map = {}
+                for _lname, _fpath in (per_layer_fonts or {}).items():
+                    _font_key = Path(_fpath).stem if _fpath else _fallback_font_label
+                    _upload_map.setdefault(_font_key, []).append(_lname)
+                if _upload_map:
+                    st.markdown("\u4e0a\u4f20\u5b57\u4f53\u5e94\u7528\u7ed3\u679c\uff1a")
+                    for _font_name, _layers in _upload_map.items():
+                        _layers_txt = "\u3001".join(_layers)
+                        st.info(f"{_font_name} -> \u56fe\u5c42\uff1a{_layers_txt}")
                 for d, p in uploaded_only.items():
                     push_font_history(d, p)
             else:
