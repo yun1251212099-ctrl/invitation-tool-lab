@@ -695,10 +695,8 @@ def extract_per_layer_color(psd):
 def get_text_layer_positions(psd, font_path=None, per_layer_fonts=None):
     """Return {layer_name: (center_y, calibrated_font_size, psd_width, stroke_width, center_x, align)}.
 
-    align is determined by reading the PSD paragraph justification property.
-    Default is always 'center' unless the source file explicitly specifies
-    left/right alignment (Justification != 2).
-    PSD Justification values: 0=left, 1=right, 2=center, 3=justify-all.
+    center_x: horizontal center of the PSD text layer.
+    align: 'center' if layer center is near image center, else 'left'.
     """
     img_w = psd.width
     positions = {}
@@ -706,17 +704,8 @@ def get_text_layer_positions(psd, font_path=None, per_layer_fonts=None):
         if l.kind == "type":
             cy = (l.top + l.bottom) // 2
             cx = (l.left + l.right) // 2
-            align = "center"
-            try:
-                para = l.engine_dict.get("ParagraphRun", {}).get("RunArray", [{}])[0]
-                para_ss = para.get("ParagraphSheet", {}).get("Properties", {})
-                justification = int(para_ss.get("Justification", 2))
-                if justification == 0:
-                    align = "left"
-                elif justification == 1:
-                    align = "right"
-            except Exception:
-                pass
+            layer_cx_ratio = abs(cx - img_w / 2) / max(1, img_w)
+            align = "center" if layer_cx_ratio < 0.05 else "left"
             ss = l.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
             raw_size = ss.get("FontSize", 51)
             cal_size = int(raw_size)
