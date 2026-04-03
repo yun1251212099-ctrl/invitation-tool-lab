@@ -513,11 +513,33 @@ def _template_cache_key(uploaded):
     return f"{uploaded.name}:{uploaded.size}"
 
 
+def _load_pdf_as_image(path: str) -> "Image.Image | None":
+    """Convert first page of PDF to RGBA image using PyMuPDF."""
+    try:
+        import fitz  # pymupdf
+        doc = fitz.open(path)
+        page = doc[0]
+        zoom = 3.0
+        mat = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        doc.close()
+        return img.convert("RGBA")
+    except ImportError:
+        st.error("PDF 支持需要 pymupdf 库。请在 requirements.txt 中添加 pymupdf。")
+        return None
+    except Exception as e:
+        st.error(f"PDF 解析失败: {e}")
+        return None
+
+
 def load_image(uploaded):
     suffix = file_suffix(uploaded)
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(uploaded.getvalue())
         tmp.flush()
+        if suffix == ".pdf":
+            return _load_pdf_as_image(tmp.name)
         try:
             img = Image.open(tmp.name).convert("RGBA")
             return img
