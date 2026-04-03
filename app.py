@@ -83,10 +83,13 @@ def _is_emoji(ch: str) -> bool:
     return bool(_EMOJI_RE.fullmatch(ch))
 
 
+_BUNDLED_EMOJI = str(Path(__file__).parent / "fonts" / "NotoColorEmoji.ttf")
 _EMOJI_FONT_PATHS = [
+    _BUNDLED_EMOJI,
     "/System/Library/Fonts/Apple Color Emoji.ttc",
     "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
     "/usr/share/fonts/noto-cjk/NotoColorEmoji.ttf",
+    "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf",
     "C:\\Windows\\Fonts\\seguiemj.ttf",
 ]
 _APPLE_EMOJI_VALID_SIZES = [20, 26, 32, 40, 48, 52, 64, 96, 160]
